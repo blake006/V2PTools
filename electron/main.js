@@ -163,13 +163,18 @@ async function enableSystemProxy(nodeId) {
 
 /** 关闭系统代理：先还原系统设置，再停内核（避免流量打到已关闭的端口） */
 async function disableSystemProxy() {
+  let restoreErr = null;
   if (sysproxy) {
-    await sysproxy.restore().catch((err) => {
-      console.error('还原系统代理失败:', err.message);
-    });
+    try {
+      await sysproxy.restore();
+    } catch (err) {
+      restoreErr = err;
+    }
   }
-  if (gateway) await gateway.stop();
+  // 还原失败就保留内核，否则用户会处于「代理指向死端口」的状态
+  if (!restoreErr && gateway) await gateway.stop();
   sendProxyState();
+  if (restoreErr) throw new Error('还原系统代理失败：' + restoreErr.message);
   return proxyStatus();
 }
 
