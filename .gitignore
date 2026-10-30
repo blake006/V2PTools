@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.selftest/
+.shots/
+vendor/*.exe
+vendor/*.zip
+*.log
+.DS_Store
+Thumbs.db
+.tmpbuild/
+build.log

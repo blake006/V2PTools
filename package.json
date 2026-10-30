@@ -1,0 +1,69 @@
+{
+  "name": "v2ptools",
+  "productName": "V2PTools",
+  "version": "1.0.0",
+  "description": "V2PTools - 代理池体检 + 一键设置 Windows 系统代理（基于 IPHealth）",
+  "main": "electron/main.js",
+  "author": {
+    "name": "black-ant",
+    "email": "black-ant@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "fetch-core": "node scripts/fetch-core.js",
+    "dev": "electron . --dev",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win zip",
+    "dist:zip": "electron-builder --win zip",
+    "dist:exe": "makensis build/portable.nsi",
+    "test-sysproxy": "node scripts/test-sysproxy.js",
+    "test-gateway": "node scripts/test-gateway.js"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "electron": "^32.3.3",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.v2ptools.desktop",
+    "productName": "V2PTools",
+    "copyright": "Copyright © 2026 V2PTools",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/mihomo.exe",
+        "to": "core/mihomo.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "V2PTools-${version}-win-x64.${ext}",
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "V2PTools-${version}-win-x64-portable.${ext}",
+      "unpackDirName": "V2PTools"
+    },
+    "compression": "normal"
+  }
+}

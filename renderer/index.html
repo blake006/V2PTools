@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'" />
+  <title>V2PTools · 代理体检与系统代理</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="titlebar" id="titlebar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M12 2.5 4 6v6c0 4.6 3.2 8.3 8 9.5 4.8-1.2 8-4.9 8-9.5V6l-8-3.5Z" stroke-linejoin="round"/>
+        <path d="M8.2 12.2l2.6 2.6 5-5.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="brand-name">V2PTools</span>
+      <span class="brand-sub">代理体检 · 系统代理</span>
+    </div>
+    <div class="titlebar-right">
+      <button class="core-badge proxy-badge" id="proxyBadge" title="点击开启/关闭系统代理">
+        <i class="dot"></i><span id="proxyBadgeText">系统代理 已关闭</span>
+      </button>
+      <span class="core-badge" id="coreBadge" title="内核状态">
+        <i class="dot"></i><span id="coreText">检测内核…</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="app">
+    <!-- 工具栏 -->
+    <header class="toolbar">
+      <div class="toolbar-left">
+        <button class="btn btn-primary" id="btnImport">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+          导入代理
+        </button>
+        <div class="btn-group">
+          <button class="btn" id="btnSync">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            更新代理
+          </button>
+          <button class="btn btn-split" id="btnSyncMenu" title="更新选项">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="menu" id="syncMenu">
+            <button data-sync="all">更新全部订阅源</button>
+            <button data-sync="selected">更新选中节点所在订阅</button>
+            <hr />
+            <button data-sync="manage">管理订阅源…</button>
+          </div>
+        </div>
+        <div class="btn-group">
+          <button class="btn" id="btnTestAll" data-mode="full">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" stroke-linejoin="round"/></svg>
+            全面检测
+          </button>
+          <button class="btn btn-split" id="btnTestMenu" title="更多检测方式">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="menu" id="testMenu">
+            <button data-mode="latency">仅测延迟</button>
+            <button data-mode="speed">测延迟 + 速度</button>
+            <button data-mode="ip">测延迟 + IP 健康度</button>
+            <button data-mode="full">全面检测（延迟+速度+IP）</button>
+            <hr />
+            <button data-mode="selected">仅检测选中项</button>
+          </div>
+        </div>
+        <button class="btn" id="btnStop" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          停止
+        </button>
+        <button class="btn btn-proxy" id="btnProxy" disabled title="把当前选中的节点设为系统代理">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v9" stroke-linecap="round"/><path d="M6.4 6.4a8 8 0 1 0 11.2 0" stroke-linecap="round"/></svg>
+          <span id="btnProxyText">系统代理</span>
+        </button>
+      </div>
+      <div class="toolbar-right">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5" stroke-linecap="round"/></svg>
+          <input id="searchInput" type="text" placeholder="搜索名称 / 服务器 / 国家 / ISP" />
+        </div>
+        <button class="btn btn-ghost" id="btnTheme" title="切换明暗主题">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6l1.4 1.4m10 10l1.4 1.4m0-12.8l-1.4 1.4m-10 10L5.6 18.4" stroke-linecap="round"/><circle cx="12" cy="12" r="4"/></svg>
+        </button>
+        <button class="btn btn-ghost" id="btnExport" title="导出结果">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="btn btn-ghost" id="btnSettings" title="设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 统计 -->
+    <section class="stats">
+      <div class="stat">
+        <div class="stat-label">节点总数</div>
+        <div class="stat-value" id="stTotal">0</div>
+        <div class="stat-hint" id="stTotalHint">等待导入</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">可用节点</div>
+        <div class="stat-value ok" id="stAlive">0</div>
+        <div class="stat-hint" id="stAliveHint">可用率 —</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">平均延迟</div>
+        <div class="stat-value" id="stLatency">—</div>
+        <div class="stat-hint" id="stLatencyHint">最优 —</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">平均速度</div>
+        <div class="stat-value" id="stSpeed">—</div>
+        <div class="stat-hint" id="stSpeedHint">峰值 —</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">平均健康度</div>
+        <div class="stat-value" id="stHealth">—</div>
+        <div class="stat-hint" id="stHealthHint">优秀 0 个</div>
+      </div>
+    </section>
+
+    <div class="main-row">
+      <!-- 分组 / 分面筛选 -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sb-block">
+          <div class="sb-title">
+            <span>分组</span>
+            <button class="icon-mini" id="btnGroupMenu" title="分组操作">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+            </button>
+            <div class="menu menu-right" id="groupMenu">
+              <button data-gact="new">新建分组（移入选中节点）</button>
+              <button data-gact="by-country">按地区自动分组</button>
+              <button data-gact="by-type">按协议自动分组</button>
+              <hr />
+              <button data-gact="clear">清除全部分组</button>
+            </div>
+          </div>
+          <div class="sb-list" id="groupList"></div>
+        </div>
+        <div class="sb-block">
+          <div class="sb-title"><span>协议</span></div>
+          <div class="sb-list" id="protoList"></div>
+        </div>
+        <div class="sb-block">
+          <div class="sb-title"><span>地区</span></div>
+          <div class="sb-list" id="countryList"></div>
+        </div>
+      </aside>
+
+      <!-- 表格 -->
+      <section class="table-wrap">
+        <div class="table-toolbar">
+          <div class="tt-left">
+            <button class="btn btn-ghost btn-mini" id="btnToggleSidebar" title="显示/隐藏分组栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h16" stroke-linecap="round"/></svg>
+            </button>
+            <div class="chips" id="filterChips">
+              <button class="chip active" data-filter="all">全部 <b id="cAll">0</b></button>
+              <button class="chip" data-filter="ok">可用 <b id="cOk">0</b></button>
+              <button class="chip" data-filter="fail">失败 <b id="cFail">0</b></button>
+              <button class="chip" data-filter="idle">未测 <b id="cIdle">0</b></button>
+            </div>
+          </div>
+          <div class="table-actions">
+            <button class="btn btn-mini" id="btnFilter">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z" stroke-linejoin="round"/></svg>
+              筛选<b id="filterCount" class="fcount"></b>
+            </button>
+            <span class="sel-info" id="selInfo"></span>
+            <button class="btn btn-mini" id="btnMoveGroup" disabled>移动到分组</button>
+            <button class="btn btn-mini" id="btnDeleteSel" disabled>删除选中</button>
+            <button class="btn btn-mini" id="btnClear">清空全部</button>
+          </div>
+
+          <!-- 高级筛选面板 -->
+          <div class="popover" id="filterPanel">
+            <div class="pop-head">
+              <span>筛选条件</span>
+              <button class="link-btn" id="btnResetFilter">重置</button>
+            </div>
+            <div class="pop-body">
+              <div class="frow">
+                <label>健康度 ≥</label>
+                <input type="range" id="fHealth" min="0" max="100" step="5" value="0" />
+                <span class="fval" id="fHealthVal">不限</span>
+              </div>
+              <div class="frow">
+                <label>延迟 ≤</label>
+                <input type="range" id="fLatency" min="0" max="3000" step="100" value="3000" />
+                <span class="fval" id="fLatencyVal">不限</span>
+              </div>
+              <div class="frow">
+                <label>速度 ≥</label>
+                <input type="range" id="fSpeed" min="0" max="50" step="1" value="0" />
+                <span class="fval" id="fSpeedVal">不限</span>
+              </div>
+              <div class="fsep"></div>
+              <div class="frow-col">
+                <label>IP 类型</label>
+                <div class="chips small" id="fIpTypes">
+                  <button class="chip" data-iptype="residential">住宅</button>
+                  <button class="chip" data-iptype="hosting">机房</button>
+                  <button class="chip" data-iptype="proxy">代理</button>
+                  <button class="chip" data-iptype="mobile">移动</button>
+                  <button class="chip" data-iptype="unknown">未知</button>
+                </div>
+              </div>
+              <label class="switch-line"><input type="checkbox" id="fDnsbl" /><span>只看命中黑名单的节点</span></label>
+            </div>
+          </div>
+
+          <!-- 移动到分组 -->
+          <div class="popover popover-sm" id="moveGroupPanel">
+            <div class="pop-head"><span>移动到分组</span></div>
+            <div class="pop-body" id="moveGroupList"></div>
+          </div>
+        </div>
+
+        <div class="active-filters" id="activeFilters"></div>
+
+      <div class="table-scroll" id="tableScroll">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="checkAll" /></th>
+              <th class="col-status"></th>
+              <th class="col-name sortable" data-sort="name">名称 / 协议</th>
+              <th class="col-server sortable" data-sort="server">服务器</th>
+              <th class="col-num sortable" data-sort="latency">延迟</th>
+              <th class="col-num">抖动</th>
+              <th class="col-num sortable" data-sort="speed">速度</th>
+              <th class="col-ip sortable" data-sort="ip">出口 IP</th>
+              <th class="col-loc sortable" data-sort="country">归属地</th>
+              <th class="col-isp">ISP / ASN</th>
+              <th class="col-health sortable" data-sort="health">健康度</th>
+              <th class="col-act"></th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <div class="empty" id="emptyState">
+          <div class="empty-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/></svg>
+          </div>
+          <div class="empty-title">还没有代理节点</div>
+          <div class="empty-desc">点击「导入代理」，支持单条链接、批量链接、订阅地址、Clash 配置与文件导入</div>
+          <button class="btn btn-primary" id="btnEmptyImport">导入代理</button>
+        </div>
+      </div>
+      </section>
+    </div>
+
+    <!-- 状态栏 -->
+    <footer class="statusbar">
+      <div class="progress-wrap">
+        <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+        <span class="status-text" id="statusText">就绪</span>
+      </div>
+      <div class="status-right">
+        <span id="coreVersion">内核 —</span>
+        <span class="sep">·</span>
+        <span id="selCount">已选 0</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- 导入弹窗 -->
+  <div class="modal-mask" id="importModal">
+    <div class="modal modal-lg">
+      <div class="modal-head">
+        <div class="modal-title">导入代理</div>
+        <button class="icon-btn" data-close="importModal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="tabs" id="importTabs">
+        <button class="tab active" data-tab="batch">批量链接</button>
+        <button class="tab" data-tab="sub">订阅地址</button>
+        <button class="tab" data-tab="single">单条添加</button>
+        <button class="tab" data-tab="file">文件导入</button>
+      </div>
+      <div class="modal-body">
+        <div class="tab-pane active" data-pane="batch">
+          <textarea id="batchInput" class="textarea" spellcheck="false" placeholder="每行一条，支持：
+vmess://  vless://  trojan://  ss://  ssr://  hysteria2://  tuic://  anytls://
+socks5://user:pass@host:port   http://host:port
+host:port   或   host:port:user:pass
+也可以整段粘贴：Clash / Clash.Meta YAML、sing-box JSON、SIP008、
+Surge / Loon 配置、Quantumult X 配置、Base64 订阅内容"></textarea>
+          <div class="hint-row">
+            <span>自动识别格式：Clash YAML · sing-box JSON · SIP008 · Surge · Quantumult X · Base64 · 链接列表</span>
+            <span id="batchCount" class="counter">0 行</span>
+          </div>
+        </div>
+
+        <div class="tab-pane" data-pane="sub">
+          <div class="field">
+            <label>订阅链接</label>
+            <input id="subUrl" class="input" placeholder="https://example.com/api/v1/client/subscribe?token=xxxx" />
+          </div>
+          <div class="hint-row">
+            <span>支持 Clash / V2Ray / Base64 通用订阅，自动携带 Clash 客户端 UA</span>
+          </div>
+          <div class="sub-result" id="subResult"></div>
+        </div>
+
+        <div class="tab-pane" data-pane="single">
+          <div class="field">
+            <label>代理链接 / 地址</label>
+            <input id="singleInput" class="input" placeholder="vmess://...  或  socks5://user:pass@1.2.3.4:1080  或  1.2.3.4:8080" />
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>纯 IP:端口 默认协议</label>
+              <select id="plainType" class="input">
+                <option value="socks5">SOCKS5</option>
+                <option value="http">HTTP</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>备注名称（可选）</label>
+              <input id="singleName" class="input" placeholder="留空自动命名" />
+            </div>
+          </div>
+          <div class="sub-result" id="singleResult"></div>
+        </div>
+
+        <div class="tab-pane" data-pane="file">
+          <div class="dropzone" id="dropzone">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke-linecap="round"/></svg>
+            <div class="dz-title">点击选择文件</div>
+            <div class="dz-desc">.txt / .yaml / .yml / .json / .conf</div>
+          </div>
+          <div class="sub-result" id="fileResult"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <label class="switch-line">
+          <input type="checkbox" id="dedupeCheck" checked />
+          <span>自动去重（同协议 + 同服务器 + 同端口）</span>
+        </label>
+        <div class="foot-btns">
+          <button class="btn" data-close="importModal">取消</button>
+          <button class="btn btn-primary" id="btnDoImport">导入</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <div class="modal-mask" id="settingsModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title">检测设置</div>
+        <button class="icon-btn" data-close="settingsModal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="field-row">
+          <div class="field">
+            <label>并发数</label>
+            <input id="setConcurrency" class="input" type="number" min="1" max="32" />
+            <span class="tip">同时检测的节点数量，建议 5–12</span>
+          </div>
+          <div class="field">
+            <label>延迟超时（毫秒）</label>
+            <input id="setLatencyTimeout" class="input" type="number" min="2000" max="30000" step="500" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>测速数据量（MB）</label>
+            <input id="setSpeedBytes" class="input" type="number" min="1" max="100" />
+            <span class="tip">单节点下载的数据量，越大越准也越慢</span>
+          </div>
+          <div class="field">
+            <label>测速超时（毫秒）</label>
+            <input id="setSpeedTimeout" class="input" type="number" min="5000" max="120000" step="1000" />
+          </div>
+        </div>
+        <div class="field">
+          <label>测速源</label>
+          <select id="setSpeedSource" class="input">
+            <option value="cloudflare">Cloudflare（自动，推荐）</option>
+            <option value="cachefly">Cachefly 10MB</option>
+            <option value="ovh">OVH 10MB</option>
+            <option value="tele2">Tele2 10MB</option>
+          </select>
+        </div>
+        <label class="switch-line">
+          <input type="checkbox" id="setDeepHealth" />
+          <span>深度健康检测（DNSBL 黑名单查询，更准确但更慢）</span>
+        </label>
+        <div class="section-title">系统代理</div>
+        <div class="field-row">
+          <div class="field">
+            <label>本地监听端口</label>
+            <input id="setProxyPort" class="input" type="number" min="1024" max="65535" />
+            <span class="tip">系统代理指向 127.0.0.1:该端口，被占用时自动顺延</span>
+          </div>
+          <div class="field">
+            <label>当前状态</label>
+            <input id="setProxyState" class="input" readonly />
+            <span class="tip">关闭应用时会自动还原系统代理</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>绕过代理的地址（分号分隔，留空使用默认内网列表）</label>
+          <textarea id="setProxyBypass" class="textarea textarea-sm" spellcheck="false" placeholder="localhost;127.*;10.*;172.16.*;192.168.*;<local>"></textarea>
+        </div>
+        <label class="switch-line">
+          <input type="checkbox" id="setProxyWinhttp" />
+          <span>同时写入 WinHTTP 代理（影响系统服务，通常需要管理员权限）</span>
+        </label>
+        <div class="field">
+          <label>延迟检测地址（每行一个，留空使用默认）</label>
+          <textarea id="setLatencyUrls" class="textarea textarea-sm" spellcheck="false" placeholder="http://cp.cloudflare.com/generate_204"></textarea>
+        </div>
+        <div class="field">
+          <label>取 IP 地址（每行一个，留空使用默认）</label>
+          <textarea id="setIpUrls" class="textarea textarea-sm" spellcheck="false" placeholder="http://ip.3322.net"></textarea>
+        </div>
+        <div class="about" id="aboutBox"></div>
+      </div>
+      <div class="modal-foot">
+        <div class="foot-btns">
+          <button class="btn" data-close="settingsModal">取消</button>
+          <button class="btn btn-primary" id="btnSaveSettings">保存设置</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 订阅源管理 -->
+  <div class="modal-mask" id="sourcesModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title">订阅源管理</div>
+        <button class="icon-btn" data-close="sourcesModal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="field-row">
+          <div class="field">
+            <label>添加订阅源</label>
+            <input id="srcNewUrl" class="input" placeholder="https://example.com/api/v1/client/subscribe?token=xxxx" />
+          </div>
+          <button class="btn" id="btnAddSource" style="align-self:flex-end;height:36px">添加并导入</button>
+        </div>
+        <div class="src-list" id="srcList"></div>
+        <label class="switch-line">
+          <input type="checkbox" id="syncRemoveGone" checked />
+          <span>同步时移除订阅中已失效的节点（仍存在的节点保留检测结果）</span>
+        </label>
+        <label class="switch-line">
+          <input type="checkbox" id="autoSyncOnStart" />
+          <span>启动应用时自动更新全部订阅</span>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <div class="foot-btns">
+          <button class="btn" data-close="sourcesModal">关闭</button>
+          <button class="btn btn-primary" id="btnSyncAllInModal">更新全部</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 详情抽屉 -->
+  <div class="drawer-mask" id="drawerMask"></div>
+  <aside class="drawer" id="drawer">
+    <div class="drawer-head">
+      <div>
+        <div class="drawer-title" id="drawerTitle">节点详情</div>
+        <div class="drawer-sub" id="drawerSub"></div>
+      </div>
+      <button class="icon-btn" id="drawerClose">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <script src="merge.js"></script>
+  <script src="filter.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
