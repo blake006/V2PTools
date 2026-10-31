@@ -23,6 +23,24 @@ const { fetchExitIP } = require('./tester');
 const DEFAULT_PORT = 7890;
 const PORT_SCAN_MAX = 200;
 
+/**
+ * 路由模式
+ *  global      全局：所有流量走节点
+ *  bypass-cn   绕过大陆：CN 域名 / CN IP 段直连，其余走节点（最实用）
+ *  proxy-list  仅名单：只有名单内的站点走节点，其余直连
+ */
+const ROUTE_MODES = {
+  global: { label: '全局代理', desc: '所有流量都走节点' },
+  'bypass-cn': { label: '绕过大陆', desc: '国内域名/IP 直连，其余走节点' },
+  'proxy-list': { label: '仅名单代理', desc: '只有名单内的站点走节点' },
+};
+
+const RULE_FILES = {
+  'cn-domain': { file: 'cn-domain.yaml', behavior: 'domain' },
+  'cn-cidr': { file: 'cn-cidr.yaml', behavior: 'ipcidr' },
+  'gfw-domain': { file: 'gfw-domain.yaml', behavior: 'domain' },
+};
+
 function httpGet(port, urlPath, timeout = 1200) {
   return new Promise((resolve, reject) => {
     const req = http.get({ host: '127.0.0.1', port, path: urlPath, timeout }, (res) => {
@@ -65,6 +83,7 @@ class Gateway {
   constructor(opts = {}) {
     this.corePath = opts.corePath;
     this.dataDir = opts.dataDir || process.cwd();
+    this.rulesDir = opts.rulesDir || '';
     this.onLog = opts.onLog || (() => {});
     this.onExit = opts.onExit || (() => {});
 
@@ -72,6 +91,7 @@ class Gateway {
     this.port = 0;
     this.ctlPort = 0;
     this.node = null;
+    this.routeMode = 'global';
     this.running = false;
     this.startedAt = 0;
     this.lastError = '';
@@ -81,7 +101,62 @@ class Gateway {
 
   /* ---------------- 配置 ---------------- */
 
-  buildConfig(node, port, ctlPort) {
+  /**
+   * mihomo 只允许 rule-provider 指向「数据目录内的子路径」，
+   * 所以启动前把随包分发的规则复制到 <dataDir>/rules，配置里用相对路径引用。
+   */
+  ensureLocalRules() {
+    if (!this.rulesDir || !fs.existsSync(this.rulesDir)) return '';
+    const localDir = path.join(this.dataDir, 'rules');
+    fs.mkdirSync(localDir, { recursive: true });
+    for (const meta of Object.values(RULE_FILES)) {
+      const src = path.join(this.rulesDir, meta.file);
+      if (!fs.existsSync(src)) continue;
+      const dst = path.join(localDir, meta.file);
+      let needCopy = true;
+      try {
+        needCopy = !fs.existsSync(dst) || fs.statSync(dst).size !== fs.statSync(src).size;
+      } catch (e) {
+        needCopy = true;
+      }
+      if (needCopy) fs.copyFileSync(src, dst);
+    }
+    return localDir;
+  }
+
+  /** 按路由模式生成 rule-providers / rules */
+  buildRouting(routeMode) {
+    const mode = ROUTE_MODES[routeMode] ? routeMode : 'global';
+    if (mode === 'global') return { providers: null, rules: ['MATCH,PROXY'] };
+
+    const need = mode === 'bypass-cn' ? ['cn-domain', 'cn-cidr'] : ['gfw-domain'];
+    const providers = {};
+    const missing = [];
+    for (const key of need) {
+      const meta = RULE_FILES[key];
+      if (!this.rulesDir || !fs.existsSync(path.join(this.rulesDir, meta.file))) {
+        missing.push(meta.file);
+        continue;
+      }
+      providers[key] = {
+        type: 'file',
+        behavior: meta.behavior,
+        format: 'yaml',
+        path: `./rules/${meta.file}`, // 相对 dataDir，mihomo 只接受数据目录内的路径
+      };
+    }
+    if (missing.length) {
+      throw new Error(`缺少分流规则文件 ${missing.join(', ')}，请执行 npm run fetch-rules 后重新打包`);
+    }
+
+    const rules =
+      mode === 'bypass-cn'
+        ? ['RULE-SET,cn-domain,DIRECT', 'RULE-SET,cn-cidr,DIRECT', 'MATCH,PROXY']
+        : ['RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT'];
+    return { providers, rules };
+  }
+
+  buildConfig(node, port, ctlPort, opts = {}) {
     const conf = Object.assign({}, node.conf || {});
     // 关键字段以节点模型为准，避免 conf 里的残留字段覆盖
     delete conf.name;
@@ -89,7 +164,9 @@ class Gateway {
     delete conf.server;
     delete conf.port;
 
-    return {
+    const routing = this.buildRouting(opts.routeMode || 'global');
+
+    const cfg = {
       'mixed-port': port,
       'allow-lan': false,
       mode: 'rule',
@@ -120,8 +197,10 @@ class Gateway {
           port: Number(node.port),
         },
       ],
-      rules: ['MATCH,PROXY'],
+      rules: routing.rules,
     };
+    if (routing.providers) cfg['rule-providers'] = routing.providers;
+    return cfg;
   }
 
   readLog() {
@@ -154,10 +233,12 @@ class Gateway {
     this.node = node;
     this.port = port;
     this.ctlPort = ctlPort;
+    this.routeMode = ROUTE_MODES[opts.routeMode] ? opts.routeMode : 'global';
     this.lastError = '';
 
-    const cfg = this.buildConfig(node, port, ctlPort);
+    const cfg = this.buildConfig(node, port, ctlPort, { routeMode: this.routeMode });
     fs.mkdirSync(this.dataDir, { recursive: true });
+    this.ensureLocalRules();
     fs.writeFileSync(this.configPath, yaml.dump(cfg, { lineWidth: 4096, noRefs: true }), 'utf8');
 
     const out = fs.openSync(this.logPath, 'w');
@@ -210,12 +291,23 @@ class Gateway {
     return false;
   }
 
-  /** 换节点：保持端口不变（系统代理无需改动），重启内核即可 */
+  /** 换节点：保持端口与路由模式不变（系统代理无需改动），重启内核即可 */
   async switchNode(node) {
     if (!this.running) throw new Error('系统代理未开启');
-    const port = this.port;
+    const { port, routeMode } = this;
     await this.stop({ silent: true });
-    return this.start(node, { port });
+    return this.start(node, { port, routeMode });
+  }
+
+  /** 切换路由模式：同样保持端口不变，系统代理设置完全不动 */
+  async setRouteMode(routeMode) {
+    if (!this.running) throw new Error('系统代理未开启');
+    if (!ROUTE_MODES[routeMode]) throw new Error('未知的路由模式：' + routeMode);
+    if (routeMode === this.routeMode) return { port: this.port, routeMode };
+    const port = this.port;
+    const node = this.node;
+    await this.stop({ silent: true });
+    return this.start(node, { port, routeMode });
   }
 
   async stop(opts = {}) {
@@ -254,6 +346,8 @@ class Gateway {
     return {
       running: this.running,
       port: this.port,
+      routeMode: this.routeMode,
+      routeLabel: (ROUTE_MODES[this.routeMode] || ROUTE_MODES.global).label,
       node: this.node
         ? { id: this.node.id, name: this.node.name, type: this.node.type, server: this.node.server, port: this.node.port }
         : null,
@@ -263,4 +357,4 @@ class Gateway {
   }
 }
 
-module.exports = { Gateway, DEFAULT_PORT, pickPort };
+module.exports = { Gateway, DEFAULT_PORT, pickPort, ROUTE_MODES };

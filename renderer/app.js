@@ -21,6 +21,7 @@ const state = {
     systemProxyPort: 7890,
     systemProxyBypass: '',
     systemProxyWinhttp: false,
+    routeMode: 'global',
   },
   filters: {
     status: 'all',
@@ -1293,32 +1294,83 @@ function pickProxyNode() {
   return null;
 }
 
+const ROUTE_LABEL = { global: '全局代理', 'bypass-cn': '绕过大陆', 'proxy-list': '仅名单代理' };
+
+function currentRouteMode() {
+  const s = state.proxy || {};
+  return s.routeMode || state.settings.routeMode || 'global';
+}
+
 function renderProxyState(st) {
   if (st) state.proxy = st;
   const s = state.proxy || {};
   const on = !!s.on;
   const gw = s.gateway || {};
   const node = gw.node;
+  const routeMode = currentRouteMode();
+  const routeLabel = ROUTE_LABEL[routeMode] || '全局代理';
 
   const btn = $('#btnProxy');
   btn.classList.toggle('on', on);
   btn.disabled = !state.nodes.length || state.proxyBusy;
   $('#btnProxyText').textContent = on ? `代理 :${gw.port}` : '系统代理';
-  btn.title = on ? `系统代理已开启 → 127.0.0.1:${gw.port}，点击关闭` : '把选中的节点设为系统代理';
+  btn.title = on ? `系统代理已开启 → 127.0.0.1:${gw.port}（${routeLabel}），点击关闭` : '把选中的节点设为系统代理';
 
   const badge = $('#proxyBadge');
   badge.classList.toggle('ok', on);
   badge.classList.toggle('err', !!(!on && (s.system && s.system.lastError)));
   $('#proxyBadgeText').textContent = on
-    ? `系统代理 · ${node ? node.name || node.server : ''}`
+    ? `系统代理 · ${routeLabel}`
     : '系统代理 已关闭';
-  badge.title = on ? `已开启：127.0.0.1:${gw.port}（点击关闭）` : '点击把选中节点设为系统代理';
+  badge.title = on
+    ? `已开启：127.0.0.1:${gw.port}\n出口：${node ? node.name || node.server : '—'}\n分流：${routeLabel}`
+    : '点击把选中节点设为系统代理';
+
+  // 分流方式菜单的选中态
+  $$('#proxyMenu [data-route]').forEach((el) => {
+    el.classList.toggle('active', el.dataset.route === routeMode);
+  });
 
   // 只有「使用中的节点」变化时才重绘表格，避免每次状态推送都闪一下
   const sig = `${on}|${gw.port}|${node ? node.id : ''}`;
   if (state.__proxySig !== sig) {
     state.__proxySig = sig;
     if (state.nodes.length) renderTable();
+  }
+}
+
+/** 切换分流方式：已开启时立即生效（重启内核，端口与系统代理都不动） */
+async function setRouteMode(mode) {
+  if (!ROUTE_LABEL[mode]) return;
+  if (state.proxyBusy) return;
+  state.settings.routeMode = mode;
+  await window.api.setStore('settings', state.settings);
+
+  if (!(state.proxy && state.proxy.on)) {
+    state.proxy = { ...(state.proxy || {}), routeMode: mode };
+    renderProxyState();
+    return toast(`分流方式：${ROUTE_LABEL[mode]}（开启系统代理后生效）`, 'ok');
+  }
+
+  state.proxyBusy = true;
+  renderProxyState();
+  setStatus(`正在切换分流方式：${ROUTE_LABEL[mode]}…`);
+  try {
+    const st = await window.api.proxyRoute(mode);
+    if (st && st.error) {
+      toast('切换失败：' + st.error, 'err');
+      return;
+    }
+    renderProxyState(st);
+    toast(`分流方式已切换：${ROUTE_LABEL[mode]}`, 'ok');
+    setStatus(`系统代理 · ${ROUTE_LABEL[mode]}`);
+    window.api.proxyProbe().then((r) => {
+      if (r && r.ok) toast(`链路可用，出口 IP ${r.ip}`, 'ok');
+      else if (r) toast('链路校验失败：' + (r.error || ''), 'err');
+    });
+  } finally {
+    state.proxyBusy = false;
+    renderProxyState();
   }
 }
 
@@ -1422,12 +1474,14 @@ function fillSettings() {
   $('#setProxyPort').value = s.systemProxyPort || 7890;
   $('#setProxyBypass').value = s.systemProxyBypass || '';
   $('#setProxyWinhttp').checked = !!s.systemProxyWinhttp;
+  $('#setRouteMode').value = s.routeMode || 'global';
   $('#setProxyState').value =
     state.proxy && state.proxy.on ? `已开启 · 127.0.0.1:${state.proxy.gateway.port}` : '已关闭';
 }
 
 async function saveSettings() {
   const prevPort = state.settings.systemProxyPort;
+  const prevRoute = state.settings.routeMode;
   state.settings = {
     ...state.settings,
     concurrency: Math.max(1, Math.min(32, parseInt($('#setConcurrency').value, 10) || 8)),
@@ -1441,11 +1495,18 @@ async function saveSettings() {
     systemProxyPort: Math.max(1024, Math.min(65535, parseInt($('#setProxyPort').value, 10) || 7890)),
     systemProxyBypass: $('#setProxyBypass').value.trim(),
     systemProxyWinhttp: $('#setProxyWinhttp').checked,
+    routeMode: $('#setRouteMode').value,
   };
   await window.api.setStore('settings', state.settings);
   applyTheme(state.settings.theme);
   closeModal('settingsModal');
-  if (state.proxy && state.proxy.on && prevPort !== state.settings.systemProxyPort) {
+
+  const on = state.proxy && state.proxy.on;
+  if (on && prevRoute !== state.settings.routeMode) {
+    await setRouteMode(state.settings.routeMode);
+    return;
+  }
+  if (on && prevPort !== state.settings.systemProxyPort) {
     toast('端口已保存，重新开启系统代理后生效', 'ok');
   } else {
     toast('设置已保存', 'ok');
@@ -1528,6 +1589,7 @@ document.addEventListener('click', (e) => {
   // 菜单
   if (!t.closest('.btn-group')) $('#testMenu').classList.remove('open');
   if (!t.closest('.btn-group')) $('#syncMenu').classList.remove('open');
+  if (!t.closest('#proxyMenu') && !t.closest('#btnProxyMenu')) $('#proxyMenu').classList.remove('open');
 
   // 筛选 / 分组弹层
   if (!t.closest('#filterPanel') && !t.closest('#btnFilter')) $('#filterPanel').classList.remove('open');
@@ -1615,6 +1677,18 @@ $$('#testMenu button').forEach((b) => {
   });
 });
 $('#btnProxy').addEventListener('click', toggleSystemProxy);
+
+$('#btnProxyMenu').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#proxyMenu').classList.toggle('open');
+});
+
+$('#proxyMenu').addEventListener('click', (e) => {
+  const item = e.target.closest('[data-route]');
+  if (!item) return;
+  $('#proxyMenu').classList.remove('open');
+  setRouteMode(item.dataset.route);
+});
 $('#proxyBadge').addEventListener('click', toggleSystemProxy);
 
 $('#btnStop').addEventListener('click', async () => {

@@ -9,7 +9,7 @@ const parser = require('./lib/parser');
 const { CoreManager } = require('./lib/core');
 const { Runner } = require('./lib/runner');
 const { SystemProxy, DEFAULT_BYPASS } = require('./lib/sysproxy');
-const { Gateway, DEFAULT_PORT } = require('./lib/gateway');
+const { Gateway, DEFAULT_PORT, ROUTE_MODES } = require('./lib/gateway');
 
 const isDev = process.argv.includes('--dev');
 
@@ -43,6 +43,17 @@ function resolveCorePath() {
   }
   candidates.push(path.join(__dirname, '..', 'vendor', 'mihomo.exe'));
   candidates.push(path.join(app.getPath('userData'), 'core', 'mihomo.exe'));
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return candidates[candidates.length - 1];
+}
+
+/** 分流规则目录（随包分发的 assets/rules） */
+function resolveRulesDir() {
+  const candidates = [];
+  if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'rules'));
+  candidates.push(path.join(__dirname, '..', 'assets', 'rules'));
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
@@ -114,10 +125,12 @@ function createWindow() {
               hasProxyBtn: !!document.querySelector('#btnProxy'),
               hasProxyBadge: !!document.querySelector('#proxyBadge'),
               hasPortInput: !!document.querySelector('#setProxyPort'),
+              hasRouteMenu: !!document.querySelector('#proxyMenu [data-route="bypass-cn"]'),
+              hasRouteSelect: !!document.querySelector('#setRouteMode'),
               brand: (document.querySelector('.brand-name') || {}).textContent,
               btnText: (document.querySelector('#btnProxyText') || {}).textContent,
               badgeText: (document.querySelector('#proxyBadgeText') || {}).textContent,
-              state: typeof state !== 'undefined' ? { nodes: state.nodes.length, proxy: state.proxy } : null })`
+              state: typeof state !== 'undefined' ? { nodes: state.nodes.length, route: state.settings.routeMode, proxy: state.proxy } : null })`
         );
         writeSmoke({ ok: true, probe, logs, at: new Date().toISOString() });
         console.log('[smoke]', JSON.stringify(probe));
@@ -152,10 +165,13 @@ function sendProxyState() {
 async function proxyStatus() {
   const gw = gateway ? gateway.status() : { running: false, port: 0, node: null };
   const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
+  const s = store ? currentSettings() : {};
   return {
     gateway: gw,
     system: sys,
     platform: process.platform,
+    routeMode: gw.routeMode || s.routeMode || 'global',
+    routeModes: ROUTE_MODES,
     // 「真正生效」= 内核在跑 且 系统代理指向这个内核端口
     on: !!(gw.running && sys.active && sys.server === `127.0.0.1:${gw.port}`),
   };
@@ -173,11 +189,12 @@ async function enableSystemProxy(nodeId) {
 
   const s = currentSettings();
   const wantPort = Number(s.systemProxyPort) || DEFAULT_PORT;
+  const routeMode = ROUTE_MODES[s.routeMode] ? s.routeMode : 'global';
   const bypass = s.systemProxyBypass && String(s.systemProxyBypass).trim() ? String(s.systemProxyBypass).trim() : DEFAULT_BYPASS;
 
   const sameNode = gateway.running && gateway.node && gateway.node.id === node.id;
-  if (!sameNode || gateway.port !== wantPort) {
-    await gateway.start(node, { port: wantPort });
+  if (!sameNode || gateway.port !== wantPort || gateway.routeMode !== routeMode) {
+    await gateway.start(node, { port: wantPort, routeMode });
   }
 
   try {
@@ -231,6 +248,7 @@ app.whenReady().then(async () => {
 
   gateway = new Gateway({
     corePath: resolveCorePath(),
+    rulesDir: resolveRulesDir(),
     dataDir: path.join(userData, 'gateway'),
     onLog: (msg) => {
       if (win && !win.isDestroyed()) win.webContents.send('core:log', msg);
@@ -465,6 +483,21 @@ ipcMain.handle('proxy:switch', async (e, nodeId) => {
   if (!node) return { error: '找不到该节点' };
   try {
     await gateway.switchNode(node);
+    sendProxyState();
+    return await proxyStatus();
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+/** 切换路由模式：已开启时立即生效（端口不变，系统代理不动），未开启时只记设置 */
+ipcMain.handle('proxy:route', async (e, mode) => {
+  if (!ROUTE_MODES[mode]) return { error: '未知的路由模式：' + mode };
+  const s = currentSettings();
+  store.write('settings.json', { ...s, routeMode: mode });
+  if (!gateway.running) return await proxyStatus();
+  try {
+    await gateway.setRouteMode(mode);
     sendProxyState();
     return await proxyStatus();
   } catch (err) {

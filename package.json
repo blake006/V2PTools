@@ -1,7 +1,7 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "代理池体检 + 系统代理工具",
   "main": "electron/main.js",
   "author": {
@@ -21,7 +21,8 @@
     "test-sysproxy": "node scripts/test-sysproxy.js",
     "test-gateway": "node scripts/test-gateway.js",
     "bump": "node scripts/bump-version.js",
-    "icon": "electron scripts/make-icon.js"
+    "icon": "electron scripts/make-icon.js",
+    "fetch-rules": "node scripts/fetch-rules.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
@@ -47,6 +48,13 @@
       {
         "from": "vendor/mihomo.exe",
         "to": "core/mihomo.exe"
+      },
+      {
+        "from": "assets/rules",
+        "to": "rules",
+        "filter": [
+          "*.yaml"
+        ]
       }
     ],
     "win": {

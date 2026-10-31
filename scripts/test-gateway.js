@@ -59,7 +59,7 @@ function tcpAlive(port, timeout = 1500) {
 (async () => {
   console.log('系统代理网关测试\n');
 
-  const gw = new Gateway({ corePath: CORE, dataDir: TMP_DIR });
+  const gw = new Gateway({ corePath: CORE, dataDir: TMP_DIR, rulesDir: path.join(__dirname, '..', 'assets', 'rules') });
 
   /* ---------------- 1. 配置生成 ---------------- */
   const node = {
@@ -116,7 +116,44 @@ function tcpAlive(port, timeout = 1500) {
   await check('conf 里的 port 不覆盖节点端口', () => assert.strictEqual(cfg2.proxies[0].port, 8443));
   await check('conf 里其它字段正常保留', () => assert.strictEqual(cfg2.proxies[0].password, 'pwd'));
 
-  /* ---------------- 3. 端口选择 ---------------- */
+  /* ---------------- 3. 路由模式 ---------------- */
+  const cfgGlobal = gw.buildConfig(node, 7890, 7891, { routeMode: 'global' });
+  await check('全局模式：MATCH,PROXY', () => assert.deepStrictEqual(cfgGlobal.rules, ['MATCH,PROXY']));
+  await check('全局模式：不带 rule-providers', () => assert.strictEqual(cfgGlobal['rule-providers'], undefined));
+
+  const cfgBypass = gw.buildConfig(node, 7890, 7891, { routeMode: 'bypass-cn' });
+  await check('绕过大陆：CN 域名/IP 直连', () => {
+    assert.deepStrictEqual(cfgBypass.rules, [
+      'RULE-SET,cn-domain,DIRECT',
+      'RULE-SET,cn-cidr,DIRECT',
+      'MATCH,PROXY',
+    ]);
+  });
+  await check('绕过大陆：注册两个规则集', () => {
+    const p = cfgBypass['rule-providers'];
+    assert.ok(p['cn-domain'] && p['cn-cidr']);
+    assert.strictEqual(p['cn-domain'].behavior, 'domain');
+    assert.strictEqual(p['cn-cidr'].behavior, 'ipcidr');
+    // 路径必须是数据目录内的相对路径，mihomo 才允许加载
+    assert.strictEqual(p['cn-domain'].path, './rules/cn-domain.yaml');
+    assert.ok(fs.existsSync(path.join(__dirname, '..', 'assets', 'rules', 'cn-domain.yaml')));
+  });
+
+  const cfgList = gw.buildConfig(node, 7890, 7891, { routeMode: 'proxy-list' });
+  await check('仅名单：名单走代理，其余直连', () => {
+    assert.deepStrictEqual(cfgList.rules, ['RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT']);
+    assert.ok(cfgList['rule-providers']['gfw-domain']);
+  });
+
+  const cfgUnknown = gw.buildConfig(node, 7890, 7891, { routeMode: 'nonsense' });
+  await check('未知模式回退到全局', () => assert.deepStrictEqual(cfgUnknown.rules, ['MATCH,PROXY']));
+
+  const gwNoRules = new Gateway({ corePath: CORE, dataDir: TMP_DIR, rulesDir: path.join(TMP_DIR, 'nope') });
+  await check('规则文件缺失时给出明确报错', () => {
+    assert.throws(() => gwNoRules.buildConfig(node, 7890, 7891, { routeMode: 'bypass-cn' }), /fetch-rules/);
+  });
+
+  /* ---------------- 4. 端口选择 ---------------- */
   await check('pickPort 返回可用端口', async () => {
     const p = await pickPort(17890);
     assert.strictEqual(await isPortFree(p), true);
@@ -148,7 +185,7 @@ function tcpAlive(port, timeout = 1500) {
     let started = null;
     let startErr = null;
     try {
-      started = await gw.start(testNode, { port: 17900 });
+      started = await gw.start(testNode, { port: 17900, routeMode: 'bypass-cn' });
     } catch (err) {
       startErr = err;
     }
@@ -185,10 +222,45 @@ function tcpAlive(port, timeout = 1500) {
         req.on('error', () => resolve(false));
       });
       await check('内核已加载 PROXY 出口', () => assert.strictEqual(proxiesOk, true));
+      await check('状态里带路由模式', () => assert.strictEqual(gw.status().routeMode, 'bypass-cn'));
+
+      // 110k 条 CN 域名规则能否被内核正确加载
+      const rulesOk = await new Promise((resolve) => {
+        const http = require('http');
+        const req = http.get({ host: '127.0.0.1', port: gw.ctlPort, path: '/rules', timeout: 5000 }, (res) => {
+          let body = '';
+          res.on('data', (c) => (body += c));
+          res.on('end', () => {
+            try {
+              const rules = JSON.parse(body).rules || [];
+              const payload = rules.find((r) => r.type === 'RuleSet' && /cn-domain/.test(JSON.stringify(r.payload)));
+              resolve({ count: rules.length, hasCn: !!payload });
+            } catch (e) {
+              resolve({ count: 0, hasCn: false });
+            }
+          });
+        });
+        req.on('timeout', () => {
+          req.destroy();
+          resolve({ count: 0, hasCn: false });
+        });
+        req.on('error', () => resolve({ count: 0, hasCn: false }));
+      });
+      await check('分流规则已被内核加载', () => assert.strictEqual(rulesOk.hasCn, true));
+      console.log(`       内核实际规则条数: ${rulesOk.count}`);
 
       await gw.stop();
       await check('停止后进程退出', () => assert.strictEqual(gw.status().running, false));
-      await check('停止后端口释放', async () => assert.strictEqual(await isPortFree(started.port), true));
+      await check('停止后端口释放', async () => {
+        // 内核退出后 socket 可能短暂处于 TIME_WAIT，给最多 3 秒
+        for (let i = 0; i < 15; i += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          if (await isPortFree(started.port)) return;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        assert.strictEqual(await isPortFree(started.port), true);
+      });
     }
 
     dummy.close();

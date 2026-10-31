@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   proxyEnable: (nodeId) => ipcRenderer.invoke('proxy:enable', nodeId),
   proxyDisable: () => ipcRenderer.invoke('proxy:disable'),
   proxySwitch: (nodeId) => ipcRenderer.invoke('proxy:switch', nodeId),
+  proxyRoute: (mode) => ipcRenderer.invoke('proxy:route', mode),
   proxyProbe: () => ipcRenderer.invoke('proxy:probe'),
   proxyBypassDefault: () => ipcRenderer.invoke('proxy:bypassDefault'),
 

@@ -71,6 +71,25 @@ scripts/test-gateway.js     网关配置 + 真实内核启动测试（24 项）
 
 ---
 
+## 分流方式（调节代理走向）
+
+系统代理只负责「把流量交给 127.0.0.1:7890」，具体哪些走节点、哪些直连，由网关内核按规则决定。
+工具栏「系统代理」右侧的小箭头可以随时切换，**切换立即生效，端口和系统代理设置都不动**（只重启网关内核）：
+
+| 模式 | 行为 | 规则 |
+|---|---|---|
+| **全局代理**（默认） | 所有流量都走节点 | `MATCH,PROXY` |
+| **绕过大陆** | 国内域名/IP 直连，其余走节点 | `RULE-SET,cn-domain,DIRECT` → `RULE-SET,cn-cidr,DIRECT` → `MATCH,PROXY` |
+| **仅名单代理** | 只有名单内站点走节点，其余直连 | `RULE-SET,gfw-domain,PROXY` → `MATCH,DIRECT` |
+
+规则数据来自 [Loyalsoldier/clash-rules](https://github.com/Loyalsoldier/clash-rules)（CN 域名 11 万条、CN IP 段 1 万条、被墙名单 4449 条），
+由 `npm run fetch-rules` 转成 mihomo rule-provider 格式后**随包分发**，运行时不联网、不需要下载 geo 数据。
+
+> mihomo 只允许 rule-provider 指向数据目录内的子路径，所以启动时会把规则复制到
+> `<userData>\gateway\rules\`，配置里用 `./rules/*.yaml` 相对引用。
+
+---
+
 ## 安全设计（重点）
 
 改系统代理最怕「改完没还原，电脑上不了网」。这里做了五层兜底：
@@ -93,6 +112,7 @@ scripts/test-gateway.js     网关配置 + 真实内核启动测试（24 项）
 
 | 项 | 说明 |
 |---|---|
+| 分流方式 | 全局 / 绕过大陆 / 仅名单代理，已开启时切换立即生效 |
 | 本地监听端口 | 默认 `7890`，被占用自动顺延，实际端口以界面显示为准 |
 | 绕过代理的地址 | 分号分隔，留空用默认内网列表 |
 | WinHTTP 代理 | 可选，需管理员权限 |

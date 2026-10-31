@@ -70,10 +70,21 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
           停止
         </button>
-        <button class="btn btn-proxy" id="btnProxy" disabled title="把当前选中的节点设为系统代理">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v9" stroke-linecap="round"/><path d="M6.4 6.4a8 8 0 1 0 11.2 0" stroke-linecap="round"/></svg>
-          <span id="btnProxyText">系统代理</span>
-        </button>
+        <div class="btn-group">
+          <button class="btn btn-proxy" id="btnProxy" disabled title="把当前选中的节点设为系统代理">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v9" stroke-linecap="round"/><path d="M6.4 6.4a8 8 0 1 0 11.2 0" stroke-linecap="round"/></svg>
+            <span id="btnProxyText">系统代理</span>
+          </button>
+          <button class="btn btn-split" id="btnProxyMenu" title="切换分流方式">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="menu menu-right" id="proxyMenu">
+            <div class="menu-head">分流方式</div>
+            <button data-route="global"><b>全局代理</b><span>所有流量都走节点</span></button>
+            <button data-route="bypass-cn"><b>绕过大陆</b><span>国内直连，其余走节点</span></button>
+            <button data-route="proxy-list"><b>仅名单代理</b><span>只有名单内站点走节点</span></button>
+          </div>
+        </div>
       </div>
       <div class="toolbar-right">
         <div class="search">
@@ -396,6 +407,15 @@ Surge / Loon 配置、Quantumult X 配置、Base64 订阅内容"></textarea>
           <span>深度健康检测（DNSBL 黑名单查询，更准确但更慢）</span>
         </label>
         <div class="section-title">系统代理</div>
+        <div class="field">
+          <label>分流方式</label>
+          <select id="setRouteMode" class="input">
+            <option value="global">全局代理（所有流量走节点）</option>
+            <option value="bypass-cn">绕过大陆（国内域名/IP 直连）</option>
+            <option value="proxy-list">仅名单代理（只代理名单内站点）</option>
+          </select>
+          <span class="tip">已开启时切换立即生效，端口不变；规则内置在安装包里，运行时不联网</span>
+        </div>
         <div class="field-row">
           <div class="field">
             <label>本地监听端口</label>

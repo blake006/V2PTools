@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS = {
   systemProxyPort: 7890,
   systemProxyBypass: '',
   systemProxyWinhttp: false,
+  routeMode: 'global',
 };
 
 module.exports = { Store, DEFAULT_SETTINGS };

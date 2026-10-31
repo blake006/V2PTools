@@ -638,3 +638,16 @@ tr.in-use .row-act { opacity: 1; }
 
 .drawer-actions { display: flex; gap: 8px; margin: 10px 0 2px; }
 .drawer-actions .btn { flex: 1; justify-content: center; }
+
+/* 系统代理：分流方式下拉 */
+.btn-proxy { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+#proxyMenu { min-width: 236px; }
+.menu-head {
+  padding: 7px 10px 5px; font-size: 11px; color: var(--text-faint);
+  letter-spacing: .4px; text-transform: uppercase;
+}
+#proxyMenu button { display: block; width: 100%; text-align: left; }
+#proxyMenu button b { display: block; font-weight: 550; font-size: 12.5px; color: var(--text); }
+#proxyMenu button span { display: block; font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+#proxyMenu button.active { background: var(--accent-soft); }
+#proxyMenu button.active b { color: var(--accent); }
