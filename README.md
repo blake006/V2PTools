@@ -128,17 +128,20 @@ node scripts/test-filter.js   # 原有：筛选逻辑
 
 ### 打包
 
-```bash
-npx electron-builder --win zip      # → dist/V2PTools-<版本>-win-x64.zip + dist/win-unpacked/
-makensis build/portable.nsi         # → dist/V2PTools-<版本>-win-x64-portable.exe（单文件）
-```
-
-`npm run dist:exe` 等价于第二条，但要求 `makensis` 在 PATH 里。
-若没装 NSIS，可以直接用 electron-builder 自带的那份：
+一条命令出全部产物：
 
 ```bash
-"$LOCALAPPDATA/electron-builder/Cache/nsis-3.0.4.1/bin/makensis.exe" build/portable.nsi
+npm run dist
 ```
+
+内部依次执行：
+
+1. `electron-builder --win --dir` → `dist/win-unpacked/`
+2. **rcedit 写入图标 + 产品名 + 版本号** → 否则任务管理器里显示成 `Electron` + 原子图标
+3. `7z` 压缩 → `dist/V2PTools-<版本>-win-x64.zip`
+4. `makensis` → `dist/V2PTools-<版本>-win-x64-portable.exe`
+
+两个工具都从 electron-builder 缓存里自动定位，不需要单独安装 NSIS。
 
 单文件便携版的机制：启动时把内置文件解压到 `%TEMP%\V2PTools-<版本>` 再运行，
 所以每次启动有几秒解压时间；配置仍存在 `%APPDATA%\V2PTools`，与安装版共用。
@@ -146,6 +149,33 @@ makensis build/portable.nsi         # → dist/V2PTools-<版本>-win-x64-portabl
 > 注意：如果当前 shell 里存在 `ELECTRON_RUN_AS_NODE=1`，打包后的 exe 会被当成 Node 运行
 > （表现为 `V2PTools.exe --version` 输出 `v20.18.1` 而不是 Electron 版本、界面不出现）。
 > 用 `env -u ELECTRON_RUN_AS_NODE` 启动，或直接在资源管理器里双击。
+
+### 版本号
+
+统一 **`1.0.X` 顺次递增**（1.0.0 → 1.0.1 → 1.0.2 …）：
+
+```bash
+npm run bump            # patch 位 +1，同步 package.json 与 build/portable.nsi
+npm run bump -- 1.0.7   # 或显式指定
+npm run dist            # 产物文件名与 exe 内嵌版本号自动跟着变
+```
+
+### 图标
+
+`build/icon.svg` 是母版，`npm run icon` 生成 `build/icon.ico`（16/20/24/32/40/48/64/128/256 九个尺寸）
+与 `build/icon.png`。16–24px 会自动换用简化版图形（去掉隧道环与虚线、加粗笔画），
+避免小尺寸下糊成一团。
+
+设计含义：
+
+| 元素 | 含义 |
+|---|---|
+| 深空蓝圆角方块 | 工具类桌面应用语境，任务栏/托盘中不刺眼 |
+| 白色 **V** | V2PTools 首字母，两臂分别是「进入代理链路」与「出到目标」 |
+| 左臂**断续**、右臂**实心** | 请求经代理中转 vs 直达 |
+| 顶点**青绿节点** | 这条链路「健康」（对应健康度评分，绿=优秀） |
+| 外圈淡蓝环 | 隧道口；16px 下自动隐去 |
+
 
 
 ---

@@ -1,9 +1,13 @@
 ﻿; V2PTools 单文件便携版启动器
-; 编译: makensis build/portable.nsi
+; 编译: npm run dist:exe （版本号由 scripts/build-portable.js 从 package.json 同步写入）
+; 手动: makensis build/portable.nsi
 
 Unicode true
-Name "V2PTools"
-OutFile "..\dist\V2PTools-1.0.0-win-x64-portable.exe"
+!define APPNAME "V2PTools"
+!define VERSION "1.0.1"
+
+Name "${APPNAME}"
+OutFile "..\dist\${APPNAME}-${VERSION}-win-x64-portable.exe"
 Icon "icon.ico"
 
 SilentInstall silent
@@ -14,16 +18,16 @@ SetCompressor /SOLID lzma
 SetCompress force
 SetOverwrite on
 
-VIProductVersion "1.0.0.0"
-VIAddVersionKey "ProductName" "V2PTools"
+VIProductVersion "${VERSION}.0"
+VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "FileDescription" "代理池体检 + 系统代理工具"
-VIAddVersionKey "CompanyName" "V2PTools"
-VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 V2PTools"
-VIAddVersionKey "FileVersion" "1.0.0.0"
-VIAddVersionKey "ProductVersion" "1.0.0"
+VIAddVersionKey "CompanyName" "${APPNAME}"
+VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 ${APPNAME}"
+VIAddVersionKey "FileVersion" "${VERSION}.0"
+VIAddVersionKey "ProductVersion" "${VERSION}"
 
 Section "Main"
-  SetOutPath "$TEMP\V2PTools-1.0.0"
+  SetOutPath "$TEMP\${APPNAME}-${VERSION}"
   File /r "..\dist\win-unpacked\*.*"
-  ExecWait '"$TEMP\V2PTools-1.0.0\V2PTools.exe"'
+  ExecWait '"$TEMP\${APPNAME}-${VERSION}\${APPNAME}.exe"'
 SectionEnd

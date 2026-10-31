@@ -1,8 +1,8 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.0.0",
-  "description": "V2PTools - 代理池体检 + 一键设置 Windows 系统代理（基于 IPHealth）",
+  "version": "1.0.1",
+  "description": "代理池体检 + 系统代理工具",
   "main": "electron/main.js",
   "author": {
     "name": "black-ant",
@@ -15,11 +15,13 @@
     "fetch-core": "node scripts/fetch-core.js",
     "dev": "electron . --dev",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --win zip",
-    "dist:zip": "electron-builder --win zip",
-    "dist:exe": "makensis build/portable.nsi",
+    "dist": "node scripts/build-win.js",
+    "dist:zip": "node scripts/build-win.js",
+    "dist:exe": "node scripts/build-portable.js",
     "test-sysproxy": "node scripts/test-sysproxy.js",
-    "test-gateway": "node scripts/test-gateway.js"
+    "test-gateway": "node scripts/test-gateway.js",
+    "bump": "node scripts/bump-version.js",
+    "icon": "electron scripts/make-icon.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

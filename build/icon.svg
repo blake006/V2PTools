@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.55" y2="1">
+      <stop offset="0" stop-color="#1e2a44"/>
+      <stop offset="0.55" stop-color="#131a29"/>
+      <stop offset="1" stop-color="#080c13"/>
+    </linearGradient>
+    <linearGradient id="vt" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#c3d4f0"/>
+    </linearGradient>
+    <linearGradient id="nd" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7bf7c1"/>
+      <stop offset="1" stop-color="#17a06c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.62">
+      <stop offset="0" stop-color="#4f8cff" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#4f8cff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 底板 -->
+  <rect x="0" y="0" width="256" height="256" rx="58" fill="url(#bg)"/>
+  <rect x="0" y="0" width="256" height="256" rx="58" fill="url(#glow)"/>
+  <rect x="5" y="5" width="246" height="246" rx="53" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+
+  <!-- 隧道环 -->
+  <circle cx="128" cy="128" r="112" fill="none" stroke="#8fb4ff" stroke-opacity="0.13" stroke-width="4"/>
+
+  <!-- 左臂：断续，表示经代理中转 -->
+  <path d="M70 56 L128 182" fill="none" stroke="url(#vt)" stroke-width="34"
+        stroke-linecap="round" stroke-dasharray="31 15"/>
+  <!-- 右臂：实线，表示直达目标 -->
+  <path d="M128 182 L186 56" fill="none" stroke="url(#vt)" stroke-width="34" stroke-linecap="round"/>
+
+  <!-- 顶点：健康节点 -->
+  <circle cx="128" cy="182" r="25" fill="#080c13"/>
+  <circle cx="128" cy="182" r="19" fill="url(#nd)"/>
+</svg>
