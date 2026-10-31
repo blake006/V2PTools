@@ -123,9 +123,30 @@ node scripts/test-parser.js   # 原有：21 种导入格式
 node scripts/test-filter.js   # 原有：筛选逻辑
 ```
 
-调试：`V2P_DEBUG=1` 打印渲染层日志与节点自检；`V2P_EXIT_AFTER=8000` 启动 8 秒后自动退出（走完整还原流程）。
+调试：`V2P_DEBUG=1` 会在 `<userData>` 下写 `boot.log`（启动阶段）与 `smoke.json`（界面自检）；
+`V2P_EXIT_AFTER=8000` 启动 8 秒后自动退出（走完整还原流程）。打包版没有控制台，靠这两个文件排错。
 
-打包：`npm run dist`（zip）/ `npm run dist:exe`（单文件便携版，需 NSIS）。
+### 打包
+
+```bash
+npx electron-builder --win zip      # → dist/V2PTools-<版本>-win-x64.zip + dist/win-unpacked/
+makensis build/portable.nsi         # → dist/V2PTools-<版本>-win-x64-portable.exe（单文件）
+```
+
+`npm run dist:exe` 等价于第二条，但要求 `makensis` 在 PATH 里。
+若没装 NSIS，可以直接用 electron-builder 自带的那份：
+
+```bash
+"$LOCALAPPDATA/electron-builder/Cache/nsis-3.0.4.1/bin/makensis.exe" build/portable.nsi
+```
+
+单文件便携版的机制：启动时把内置文件解压到 `%TEMP%\V2PTools-<版本>` 再运行，
+所以每次启动有几秒解压时间；配置仍存在 `%APPDATA%\V2PTools`，与安装版共用。
+
+> 注意：如果当前 shell 里存在 `ELECTRON_RUN_AS_NODE=1`，打包后的 exe 会被当成 Node 运行
+> （表现为 `V2PTools.exe --version` 输出 `v20.18.1` 而不是 Electron 版本、界面不出现）。
+> 用 `env -u ELECTRON_RUN_AS_NODE` 启动，或直接在资源管理器里双击。
+
 
 ---
 

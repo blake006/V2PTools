@@ -21,6 +21,17 @@ let gateway = null;
 let sysproxy = null;
 let quitting = false;
 
+/** 启动阶段日志：仅 V2P_DEBUG 时写入 userData/boot.log（打包版没有控制台，靠它排错） */
+function bootLog(msg) {
+  if (!process.env.V2P_DEBUG) return;
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'boot.log'), `${new Date().toISOString()} ${msg}\n`);
+  } catch (e) {}
+}
+
+process.on('uncaughtException', (err) => bootLog('uncaughtException: ' + (err && err.stack ? err.stack : err)));
+process.on('unhandledRejection', (err) => bootLog('unhandledRejection: ' + (err && err.stack ? err.stack : err)));
+
 /* ------------------------------------------------------------------ */
 /* 路径                                                                */
 /* ------------------------------------------------------------------ */
@@ -49,6 +60,7 @@ const { fetchSubscription } = require('./lib/subscribe');
 /* ------------------------------------------------------------------ */
 
 function createWindow() {
+  bootLog('createWindow 开始');
   win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -71,28 +83,46 @@ function createWindow() {
     },
   });
 
+  bootLog('BrowserWindow 已创建，加载页面');
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.webContents.on('did-fail-load', (e, code, desc, url) => bootLog(`did-fail-load ${code} ${desc} ${url}`));
+  win.webContents.on('render-process-gone', (e, d) => bootLog('render-process-gone ' + JSON.stringify(d)));
   win.once('ready-to-show', () => {
+    bootLog('ready-to-show');
     win.show();
     if (isDev) win.webContents.openDevTools({ mode: 'detach' });
   });
 
   // 调试用：V2P_DEBUG=1 时打印渲染层日志与关键节点自检结果
+  // 打包版是无控制台的 GUI 程序，结果同时写到 userData/smoke.json 方便验证
   if (process.env.V2P_DEBUG) {
+    const logs = [];
+    const writeSmoke = (payload) => {
+      try {
+        fs.writeFileSync(path.join(app.getPath('userData'), 'smoke.json'), JSON.stringify(payload, null, 2), 'utf8');
+      } catch (e) {}
+    };
     win.webContents.on('console-message', (e, level, message) => {
+      logs.push(message);
       console.log('[renderer]', message);
     });
     win.webContents.on('did-finish-load', async () => {
       try {
         const probe = await win.webContents.executeJavaScript(
-          `({ apiKeys: Object.keys(window.api || {}).length,
+          `({ title: document.title,
+              apiKeys: Object.keys(window.api || {}).length,
               hasProxyBtn: !!document.querySelector('#btnProxy'),
               hasProxyBadge: !!document.querySelector('#proxyBadge'),
               hasPortInput: !!document.querySelector('#setProxyPort'),
+              brand: (document.querySelector('.brand-name') || {}).textContent,
+              btnText: (document.querySelector('#btnProxyText') || {}).textContent,
+              badgeText: (document.querySelector('#proxyBadgeText') || {}).textContent,
               state: typeof state !== 'undefined' ? { nodes: state.nodes.length, proxy: state.proxy } : null })`
         );
+        writeSmoke({ ok: true, probe, logs, at: new Date().toISOString() });
         console.log('[smoke]', JSON.stringify(probe));
       } catch (err) {
+        writeSmoke({ ok: false, error: err.message, logs, at: new Date().toISOString() });
         console.log('[smoke] 失败:', err.message);
       }
     });
@@ -183,6 +213,7 @@ async function disableSystemProxy() {
 /* ------------------------------------------------------------------ */
 
 app.whenReady().then(async () => {
+  bootLog('whenReady 触发');
   const userData = app.getPath('userData');
   store = new Store(userData);
   nativeTheme.themeSource = 'dark';
@@ -195,6 +226,7 @@ app.whenReady().then(async () => {
     },
   });
 
+  bootLog('Store/CoreManager 就绪');
   sysproxy = new SystemProxy({ dataDir: path.join(userData, 'sysproxy') });
 
   gateway = new Gateway({
@@ -216,6 +248,7 @@ app.whenReady().then(async () => {
     },
   });
 
+  bootLog('Gateway 就绪，检查遗留系统代理');
   // 上次异常退出可能残留系统代理设置，启动时先还原
   try {
     const rec = await sysproxy.recoverIfStale();
@@ -224,7 +257,9 @@ app.whenReady().then(async () => {
     console.error('检查遗留系统代理失败:', e.message);
   }
 
+  bootLog('开始创建窗口');
   createWindow();
+  bootLog('窗口创建完成');
 
   // 自动化冒烟测试用：启动后自动退出（会走完整的还原 + 退出流程）
   if (process.env.V2P_EXIT_AFTER) {
