@@ -182,7 +182,6 @@ object MihomoCore {
         val o = JSONObject()
         o.put("ok", true)
         o.put("running", running)
-        o.put("pid", if (running) process?.pid() ?: 0L else 0L)
         o.put("mixedPort", mixedPort)
         o.put("ctlPort", ctlPort)
         o.put("routeMode", routeMode)

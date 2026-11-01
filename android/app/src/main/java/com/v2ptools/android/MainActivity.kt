@@ -110,6 +110,27 @@ class MainActivity : AppCompatActivity() {
                 return assetLoader.shouldInterceptRequest(request.url)
             }
         }
+        // WebView 默认不处理 alert/confirm，不接管的话 JS 里 confirm 永远返回 false
+        web.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onJsAlert(view: WebView?, url: String?, message: String?, result: android.webkit.JsResult?): Boolean {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setMessage(message)
+                    .setPositiveButton("好") { _, _ -> result?.confirm() }
+                    .setOnCancelListener { result?.cancel() }
+                    .show()
+                return true
+            }
+
+            override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: android.webkit.JsResult?): Boolean {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setMessage(message)
+                    .setPositiveButton("确定") { _, _ -> result?.confirm() }
+                    .setNegativeButton("取消") { _, _ -> result?.cancel() }
+                    .setOnCancelListener { result?.cancel() }
+                    .show()
+                return true
+            }
+        }
         setContentView(web)
         web.loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
     }
@@ -184,7 +205,8 @@ class MainActivity : AppCompatActivity() {
                     val ctl = a.optInt("ctlPort", 9090)
                     val mode = a.optString("routeMode", "global")
                     val n = a.optInt("nodeCount", 0)
-                    store.set(ProxyService.KEY_PENDING_CONFIG, JSONObject.quote(cfg))
+                    // 存原文，供服务被系统重建时兜底；不能 quote，否则配置里会多一层引号
+                    store.set(ProxyService.KEY_PENDING_CONFIG, cfg)
                     val i = Intent(this@MainActivity, ProxyService::class.java).apply {
                         action = ProxyService.ACTION_START_CORE
                         putExtra(ProxyService.EXTRA_CONFIG, cfg)
@@ -294,6 +316,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 else -> return JSONObject().put("ok", false).put("error", "未知方法 $method")
             }
+            // 理论上走不到；保留以满足编译器的返回值检查
+            @Suppress("UNREACHABLE_CODE")
+            return JSONObject().put("ok", false).put("error", "unreachable")
         }
 
         private fun jsonList(a: JSONObject, key: String): List<String> {

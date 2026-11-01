@@ -40,12 +40,6 @@ android {
             useLegacyPackaging = true
         }
     }
-
-    // 可选：libcore.aar（VPN 模式）。存在才参与编译，不存在则自动降级为 Wi-Fi 代理模式
-    if (file("libs/libcore.aar").exists()) {
-        // 通过 flatDir 仓库按文件名引用，避免硬编码 group:name:version
-        dependencies { implementation(files("libs/libcore.aar")) }
-    }
 }
 
 dependencies {
@@ -53,4 +47,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.webkit:webkit:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // 可选：libcore.aar（VPN 模式）。存在才参与编译，不存在则自动降级为 Wi-Fi 代理模式
+    val libcoreAar = file("libs/libcore.aar")
+    if (libcoreAar.exists()) {
+        implementation(files(libcoreAar))
+    }
 }
