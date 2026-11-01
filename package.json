@@ -27,7 +27,8 @@
     "verify-switch": "node scripts/verify-route-switch.js",
     "bump": "node scripts/bump-version.js",
     "icon": "electron scripts/make-icon.js",
-    "fetch-rules": "node scripts/fetch-rules.js"
+    "fetch-rules": "node scripts/fetch-rules.js",
+    "release": "node scripts/make-release.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
