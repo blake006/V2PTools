@@ -184,13 +184,17 @@ node scripts/test-web-bundle.js
 - 浏览器包：订阅解析、筛选、合并去重、Clash 导出、配置生成
 - 三种分流模式生成的规则顺序与 provider 正确
 
-**未验证（本机没有 JDK / Android SDK，无法编译）**
+**已由 GitHub Actions 验证**
 
-- Kotlin 代码能否编译（按标准 API 写的，但没跑过编译器）
-- APK 实际运行表现
-- VPN 模式（还依赖 libcore，反射签名需按实际 AAR 调整）
+- Kotlin 能编译通过（`assembleDebug` 成功，classes.dex 6.8MB）
+- 产物 APK 26.8MB，含 ARM64 内核、三份规则、Web 资源，v2 签名可安装
+- `libmihomo.so` 经校验是真正的 AArch64 ELF（`e_machine=183`），不是下错的 Windows 版
 
-第一次构建如果报编译错误，大概率是小的 API 差异，按提示改即可。
+**仍未验证**
+
+- 真机运行表现（没有设备可测）
+- VPN 模式（还依赖 libcore.aar，反射签名需按实际 AAR 调整）
+- 实际测速/代理效果（取决于你导入的节点）
 
 ---
 
