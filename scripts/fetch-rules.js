@@ -11,11 +11,15 @@
  * 走 GitHub Git Data API（api.github.com 可直连，raw.githubusercontent.com 常被拦）
  * 输出: assets/rules/*.yaml （payload 格式，随包分发，运行时不需要联网）
  *
+ * 文本 → payload 的转换统一放在 electron/lib/ruleFormat.js，
+ * 与运行时的格式自检共用一套逻辑（历史上这里出过「规则全部失效」的 bug）。
+ *
  * 用法: npm run fetch-rules
  */
 
 const fs = require('fs');
 const path = require('path');
+const { parseRuleText, buildRuleYaml, validatePayload } = require('../electron/lib/ruleFormat');
 
 const OWNER = 'Loyalsoldier';
 const REPO = 'clash-rules';
@@ -39,29 +43,6 @@ async function api(url) {
   return res.json();
 }
 
-/** 把每行一条的规则文本转成 mihomo rule-provider 的 YAML */
-function toPayload(text) {
-  const seen = new Set();
-  const items = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#') || line.startsWith('//')) continue;
-    // 只保留域名/IP 本体，去掉 clash 规则前缀
-    let v = line;
-    if (/^(DOMAIN|DOMAIN-SUFFIX|DOMAIN-KEYWORD|IP-CIDR|IP-CIDR6),/i.test(v)) {
-      v = v.split(',').slice(1).join(',').trim();
-    }
-    if (!v || seen.has(v)) continue;
-    seen.add(v);
-    items.push(v);
-  }
-  return items;
-}
-
-function yamlEscape(s) {
-  return /[:#\-{}\[\],&*?|<>=!%@`"']/.test(s) || /^\s|\s$/.test(s) ? `'${s.replace(/'/g, "''")}'` : s;
-}
-
 (async () => {
   console.log(`拉取规则: ${OWNER}/${REPO}@${REF}`);
   const tree = await api(`https://api.github.com/repos/${OWNER}/${REPO}/git/trees/${REF}?recursive=1`);
@@ -69,6 +50,7 @@ function yamlEscape(s) {
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
+  let allOk = true;
   for (const item of FILES) {
     const sha = blobs.get(item.src);
     if (!sha) {
@@ -78,19 +60,35 @@ function yamlEscape(s) {
     process.stdout.write(`  ${item.desc} (${item.src})…`);
     const blob = await api(`https://api.github.com/repos/${OWNER}/${REPO}/git/blobs/${sha}`);
     const text = Buffer.from(blob.content, blob.encoding === 'base64' ? 'base64' : 'utf8').toString('utf8');
-    const items = toPayload(text);
 
-    const out = [
-      `# ${item.desc} — 来源 ${OWNER}/${REPO}@${REF}/${item.src}`,
-      `# 生成时间 ${new Date().toISOString()}  条目 ${items.length}`,
-      'payload:',
-      ...items.map((v) => `  - ${yamlEscape(v)}`),
-      '',
-    ].join('\n');
+    const items = parseRuleText(text);
+    if (!items.length) {
+      console.log(' 失败：解析出 0 条规则');
+      allOk = false;
+      continue;
+    }
+
+    // 自检：生成的结果必须是干净的值列表
+    const v = validatePayload(items);
+    if (!v.ok) {
+      console.log(` 失败：解析结果仍含脏数据 ${JSON.stringify(v.bad)}`);
+      allOk = false;
+      continue;
+    }
+
+    const out = buildRuleYaml(items, {
+      title: item.desc,
+      source: `${OWNER}/${REPO}@${REF}/${item.src}`,
+    });
 
     const target = path.join(OUT_DIR, item.out);
     fs.writeFileSync(target, out, 'utf8');
     console.log(` ${items.length} 条 → ${item.out} (${(fs.statSync(target).size / 1024).toFixed(0)} KB)`);
+  }
+
+  if (!allOk) {
+    console.error('\n有规则文件生成失败，请检查上游格式是否变化。');
+    process.exit(1);
   }
 
   console.log('\n完成。这些文件随包分发，运行时不联网。');

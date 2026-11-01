@@ -19,6 +19,7 @@ const yaml = require('js-yaml');
 
 const { isPortFree } = require('./core');
 const { fetchExitIP } = require('./tester');
+const { validatePayload } = require('./ruleFormat');
 
 const DEFAULT_PORT = 7890;
 const PORT_SCAN_MAX = 200;
@@ -95,6 +96,8 @@ class Gateway {
     this.running = false;
     this.startedAt = 0;
     this.lastError = '';
+    this.lastProbe = null;
+    this.rulesReady = false;
     this.configPath = path.join(this.dataDir, 'gateway.yaml');
     this.logPath = path.join(this.dataDir, 'gateway.log');
   }
@@ -104,6 +107,10 @@ class Gateway {
   /**
    * mihomo 只允许 rule-provider 指向「数据目录内的子路径」，
    * 所以启动前把随包分发的规则复制到 <dataDir>/rules，配置里用相对路径引用。
+   *
+   * 复制的同时做一次格式自检：历史版本生成过「payload 里塞着 'payload:' 和
+   * '- ''+.x.com'''」的脏规则，能被 mihomo 静默接受但一条都匹配不上，
+   * 表现为分流模式下国内站点也打不开。这里直接抛错，别让它静默失效。
    */
   ensureLocalRules() {
     if (!this.rulesDir || !fs.existsSync(this.rulesDir)) return '';
@@ -120,8 +127,30 @@ class Gateway {
         needCopy = true;
       }
       if (needCopy) fs.copyFileSync(src, dst);
+      this.assertRuleFileHealthy(dst, meta.file);
     }
     return localDir;
+  }
+
+  /** 规则文件格式自检：payload 必须是干净的值列表 */
+  assertRuleFileHealthy(file, label) {
+    let doc;
+    try {
+      doc = yaml.load(fs.readFileSync(file, 'utf8'));
+    } catch (e) {
+      throw new Error(`分流规则 ${label} 解析失败：${e.message}。请执行 npm run fetch-rules 重新生成规则后重新打包`);
+    }
+    const v = validatePayload(doc && doc.payload);
+    if (!v.ok) {
+      throw new Error(
+        `分流规则 ${label} 格式损坏（示例：${JSON.stringify(v.bad)}）。` +
+          '这会让分流完全失效（国内站点也会被代理）。请执行 npm run fetch-rules 重新生成规则后重新打包'
+      );
+    }
+    if (v.count === 0) {
+      throw new Error(`分流规则 ${label} 为空，请执行 npm run fetch-rules 重新生成`);
+    }
+    return v.count;
   }
 
   /** 按路由模式生成 rule-providers / rules */
@@ -270,6 +299,12 @@ class Gateway {
       throw new Error('代理内核启动失败：' + this.briefError(log));
     }
 
+    // 关键：等分流规则集真正加载完再宣告就绪。
+    // 11 万条域名规则的解析是异步的，比 IP 段慢得多；如果不等，
+    // 用户刚开启代理就访问站点会落到 MATCH,PROXY，表现为「分流模式下
+    // 国内站点也打不开」。这里等不到也不算致命 —— 只是降级为「可能先走代理」。
+    await this.waitRulesLoaded(8000);
+
     this.running = true;
     this.startedAt = Date.now();
     return { port: this.port, ctlPort: this.ctlPort };
@@ -288,6 +323,44 @@ class Gateway {
       // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, 150));
     }
+    return false;
+  }
+
+  /**
+   * 等所有 rule-provider 加载完成（ruleCount > 0）。
+   * 只对非 global 模式有意义 —— global 模式没有 provider。
+   * @returns {Promise<boolean>} 是否全部就绪
+   */
+  async waitRulesLoaded(timeout = 8000) {
+    if (this.routeMode === 'global') return true;
+    const expected = this.routeMode === 'bypass-cn' ? ['cn-domain', 'cn-cidr'] : ['gfw-domain'];
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      if (!this.proc) return false;
+      // eslint-disable-next-line no-await-in-loop
+      const r = await httpGet(this.ctlPort, '/providers/rules', 1500).catch(() => null);
+      if (r && r.status === 200) {
+        let providers = null;
+        try {
+          providers = JSON.parse(r.body).providers || {};
+        } catch (e) {
+          providers = null;
+        }
+        if (providers) {
+          const allReady = expected.every((k) => providers[k] && Number(providers[k].ruleCount) > 0);
+          if (allReady) {
+            this.rulesReady = true;
+            return true;
+          }
+        }
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((res) => setTimeout(res, 150));
+    }
+    // 超时：记一笔，不影响可用性（只是可能先落到 MATCH）
+    this.rulesReady = false;
+    this.onLog('分流规则加载超时，可能暂时全部走代理出口');
     return false;
   }
 
@@ -346,14 +419,49 @@ class Gateway {
     return {
       running: this.running,
       port: this.port,
+      ctlPort: this.ctlPort,
+      pid: this.proc ? this.proc.pid : 0,
       routeMode: this.routeMode,
       routeLabel: (ROUTE_MODES[this.routeMode] || ROUTE_MODES.global).label,
       node: this.node
         ? { id: this.node.id, name: this.node.name, type: this.node.type, server: this.node.server, port: this.node.port }
         : null,
       startedAt: this.startedAt,
+      // 已运行时长（秒），未运行时为 0
+      uptime: this.running && this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0,
+      // 最近一次出口探测结果：{ ok, ip, ms, at, error }
+      lastProbe: this.lastProbe || null,
+      // 分流规则是否已加载完（global 模式恒为 true）
+      rulesReady: this.routeMode === 'global' ? true : this.rulesReady,
       error: this.lastError,
     };
+  }
+
+  /**
+   * 内核存活自检：external-controller 能应答 + mixed 端口能连上。
+   * 用于把「内核悄悄死了但注册表还指着它」这种状态识别出来。
+   */
+  async alive() {
+    if (!this.running || !this.proc) return false;
+    const ctlOk = await httpGet(this.ctlPort, '/version', 900)
+      .then((r) => r.status === 200)
+      .catch(() => false);
+    if (!ctlOk) return false;
+    return tcpAlive(this.port, 900);
+  }
+
+  /** 带记忆的链路探测：结果存进 lastProbe，供状态面板展示 */
+  async probeWithCache(opts = {}) {
+    const r = await this.probe(opts).catch((e) => ({ ok: false, error: e.message }));
+    this.lastProbe = {
+      ok: !!r.ok,
+      ip: r.ip || '',
+      location: r.location || '',
+      ms: r.ms || r.latency || 0,
+      error: r.ok ? '' : r.error || '未知原因',
+      at: Date.now(),
+    };
+    return this.lastProbe;
   }
 }
 

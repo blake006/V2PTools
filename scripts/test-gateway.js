@@ -224,10 +224,10 @@ function tcpAlive(port, timeout = 1500) {
       await check('内核已加载 PROXY 出口', () => assert.strictEqual(proxiesOk, true));
       await check('状态里带路由模式', () => assert.strictEqual(gw.status().routeMode, 'bypass-cn'));
 
-      // 110k 条 CN 域名规则能否被内核正确加载
+      // 11 万条 CN 域名规则必须真的被内核吃进去（历史上曾因格式错误静默失效）
       const rulesOk = await new Promise((resolve) => {
         const http = require('http');
-        const req = http.get({ host: '127.0.0.1', port: gw.ctlPort, path: '/rules', timeout: 5000 }, (res) => {
+        const req = http.get({ host: '127.0.0.1', port: gw.ctlPort, path: '/rules', timeout: 8000 }, (res) => {
           let body = '';
           res.on('data', (c) => (body += c));
           res.on('end', () => {
