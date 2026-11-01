@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">V2PTools</string>
+    <string name="notif_channel_core">代理内核</string>
+    <string name="notif_channel_core_desc">保持代理内核运行</string>
+    <string name="notif_running">代理运行中</string>
+    <string name="notif_vpn_running">VPN 代理运行中</string>
+</resources>

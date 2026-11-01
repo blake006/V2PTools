@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0E1015" />
+<title>V2PTools</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- 顶栏 -->
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="logo">
+      <path d="M12 2.5 4 6v6c0 4.6 3.2 8.3 8 9.5 4.8-1.2 8-4.9 8-9.5V6l-8-3.5Z" stroke-linejoin="round"/>
+      <path d="M8.2 12.2l2.6 2.6 5-5.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="brand-name">V2PTools</span>
+  </div>
+  <button class="pill" id="proxyPill" data-state="off">
+    <i class="dot"></i><span id="proxyPillText">代理未开启</span>
+  </button>
+</header>
+
+<!-- 概览 -->
+<section class="stats" id="stats">
+  <div class="stat"><b id="statTotal">0</b><span>节点</span></div>
+  <div class="stat"><b id="statOk">0</b><span>可用</span></div>
+  <div class="stat"><b id="statLatency">—</b><span>平均延迟</span></div>
+  <div class="stat"><b id="statHealth">—</b><span>平均健康度</span></div>
+</section>
+
+<!-- 筛选条 -->
+<section class="filters">
+  <input id="search" class="search" type="search" placeholder="搜索名称 / 服务器 / 地区" autocomplete="off" />
+  <div class="chips" id="chips">
+    <button class="chip active" data-f="status" data-v="all">全部</button>
+    <button class="chip" data-f="status" data-v="ok">可用</button>
+    <button class="chip" data-f="status" data-v="fail">失败</button>
+    <button class="chip" data-f="status" data-v="idle">未测</button>
+    <button class="chip" data-f="dnsbl" data-v="1">仅干净</button>
+    <button class="chip" data-f="sort" data-v="health">按健康度</button>
+    <button class="chip" data-f="sort" data-v="latency">按延迟</button>
+  </div>
+</section>
+
+<!-- 节点列表 -->
+<main class="list" id="list">
+  <div class="empty" id="empty">
+    <p>还没有节点</p>
+    <span>点下方「导入」添加代理</span>
+  </div>
+</main>
+
+<!-- 体检进度 -->
+<div class="progress" id="progress" hidden>
+  <div class="bar"><i id="progressBar"></i></div>
+  <div class="ptext"><span id="progressText">准备中…</span><button id="btnStopTest" class="link">停止</button></div>
+</div>
+
+<!-- 底部操作栏 -->
+<nav class="actions">
+  <button class="act" id="btnImport">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+    导入
+  </button>
+  <button class="act primary" id="btnTest">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" stroke-linejoin="round"/></svg>
+    全面体检
+  </button>
+  <button class="act" id="btnMore">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+    更多
+  </button>
+</nav>
+
+<!-- ============ 弹层：导入 ============ -->
+<div class="sheet" id="sheetImport" hidden>
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-body">
+    <div class="sheet-head"><b>导入代理</b><button class="x" data-close>×</button></div>
+    <div class="tabs" id="importTabs">
+      <button class="tab active" data-tab="bulk">批量链接</button>
+      <button class="tab" data-tab="sub">订阅地址</button>
+      <button class="tab" data-tab="single">单条</button>
+      <button class="tab" data-tab="file">文件</button>
+    </div>
+
+    <div class="tabpane" data-pane="bulk">
+      <textarea id="bulkText" rows="6" placeholder="每行一条：ss:// vmess:// trojan:// vless:// hysteria2:// …&#10;也可以直接粘贴 base64 订阅内容"></textarea>
+      <button class="btn full" id="btnBulkAdd">解析并添加</button>
+    </div>
+
+    <div class="tabpane" data-pane="sub" hidden>
+      <input id="subUrl" type="url" placeholder="https://example.com/api/v1/client/subscribe?token=..." />
+      <div class="hint">拉取后会记住这个订阅，下次可一键更新。</div>
+      <button class="btn full" id="btnSubAdd">拉取并添加</button>
+    </div>
+
+    <div class="tabpane" data-pane="single" hidden>
+      <input id="singleText" type="text" placeholder="ss://… 或 vmess://…" />
+      <button class="btn full" id="btnSingleAdd">添加</button>
+    </div>
+
+    <div class="tabpane" data-pane="file" hidden>
+      <div class="hint">支持 txt / yaml / json / conf 等配置文件。</div>
+      <button class="btn full" id="btnFilePick">选择文件</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 弹层：更多 ============ -->
+<div class="sheet" id="sheetMore" hidden>
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-body">
+    <div class="sheet-head"><b>更多</b><button class="x" data-close>×</button></div>
+
+    <div class="group">
+      <div class="group-title">分流方式</div>
+      <div class="seg" id="routeSeg">
+        <button data-route="global">全局</button>
+        <button data-route="bypass-cn">绕过大陆</button>
+        <button data-route="proxy-list">仅名单</button>
+      </div>
+      <div class="hint" id="routeHint">国内直连、其余走节点，日常最实用。</div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">代理开关</div>
+      <div class="row2">
+        <button class="btn" id="btnStartProxy">开启代理</button>
+        <button class="btn" id="btnStartVpn">开启 VPN</button>
+      </div>
+      <div class="hint" id="vpnHint"></div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">导出</div>
+      <div class="row2">
+        <button class="btn" data-export="clash">Clash 配置</button>
+        <button class="btn" data-export="csv">CSV</button>
+        <button class="btn" data-export="json">JSON</button>
+        <button class="btn" data-export="txt">原始链接</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">设置</div>
+      <label class="field"><span>并发数</span><input id="setConcurrency" type="number" min="1" max="32" /></label>
+      <label class="field"><span>延迟超时(ms)</span><input id="setTimeout" type="number" min="1000" max="30000" step="500" /></label>
+      <label class="field"><span>测速字节</span><input id="setSpeedBytes" type="number" min="1000000" max="50000000" step="1000000" /></label>
+      <button class="btn full" id="btnSaveSettings">保存设置</button>
+    </div>
+
+    <div class="group">
+      <div class="group-title">维护</div>
+      <button class="btn full ghost" id="btnClearNodes">清空全部节点</button>
+      <div class="hint" id="appInfo"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 弹层：节点详情 ============ -->
+<div class="sheet" id="sheetNode" hidden>
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-body">
+    <div class="sheet-head"><b id="nodeTitle">节点</b><button class="x" data-close>×</button></div>
+    <div id="nodeDetail" class="detail"></div>
+    <div class="row2" style="margin-top:12px">
+      <button class="btn" id="btnNodeTest">单测</button>
+      <button class="btn primary" id="btnNodeUse">设为出口</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="vendor/js-yaml.min.js"></script>
+<script src="vendor/loader.js"></script>
+<script src="vendor/filter.js"></script>
+<script src="vendor/merge.js"></script>
+<script src="vendor/parser.js"></script>
+<script src="vendor/ruleFormat.js"></script>
+<script src="vendor/clash.js"></script>
+<script src="vendor/configgen.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

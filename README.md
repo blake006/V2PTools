@@ -59,6 +59,18 @@ scripts/test-clash.js       Clash 配置导出测试（12 项，含 mihomo -t �
 
 ---
 
+## 安卓版
+
+同仓库 `android/` 目录下是功能对齐的安卓实现（WebView 界面 + 原生 mihomo/VPN）：
+
+- 导入（批量链接 / 订阅 / 单条 / 文件）、延迟抖动测速、出口 IP 归属地、DNSBL、健康度
+- 分组筛选、三种分流方式、导出 CSV / JSON / TXT / Clash
+- 代理方式：mixed 端口 + 手动 Wi-Fi 代理；可选 VPN（需自行编译 libcore.aar）
+
+详见 [android/README.md](android/README.md)。
+
+---
+
 ## 使用
 
 1. `npm install` → `npm run fetch-core` → `npm start`

@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 内核二进制（体积大，用 scripts/fetch-core.js 拉取）
+app/src/main/jniLibs/**/libmihomo.so
+
+# 可选依赖
+app/libs/*.aar
+
+# 系统
+.DS_Store
+Thumbs.db
