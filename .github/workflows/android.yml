@@ -1,0 +1,91 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+  workflow_dispatch:
+    inputs:
+      abi:
+        description: '目标 ABI'
+        required: false
+        default: 'arm64-v8a'
+        type: choice
+        options:
+          - arm64-v8a
+          - all
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Android SDK 组件
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+
+      - name: 安装 Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: 安装 Node 依赖（只为拿 js-yaml）
+        run: npm ci --omit=dev
+
+      - name: 同步共享逻辑与规则
+        run: node android/scripts/sync-web.js
+
+      - name: 下载 mihomo 安卓内核
+        run: |
+          cd android
+          if [ "${{ github.event.inputs.abi }}" = "all" ]; then
+            node scripts/fetch-core.js --all-abi
+          else
+            node scripts/fetch-core.js
+          fi
+
+      - name: 确认内核已就位
+        run: |
+          ls -la android/app/src/main/jniLibs/*/ || true
+          test -f android/app/src/main/jniLibs/arm64-v8a/libmihomo.so \
+            || { echo "::error::内核缺失，构建出来的 APK 无法运行"; exit 1; }
+
+      - name: 编译 Debug APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: 收集产物
+        run: |
+          mkdir -p out
+          find android/app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          ls -la out/
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: V2PTools-android-debug
+          path: out/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 编译失败时输出 Gradle 日志
+        if: failure()
+        run: |
+          echo "===== 最近一次 Gradle 日志 ====="
+          find android -name '*.log' -path '*build*' -exec tail -n 200 {} \; 2>/dev/null || true

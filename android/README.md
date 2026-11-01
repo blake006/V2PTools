@@ -95,6 +95,19 @@ node scripts/sync-web.js
 
 ---
 
+## 用 GitHub Actions 构建（推荐，不用本地装工具链）
+
+仓库带了 `.github/workflows/android.yml`：推到 `main` 或手动触发，
+云端会自动装 JDK 17 + Android SDK 34、下内核、编 APK，产物在
+Actions 页面的 Artifacts 里下载（保留 30 天）。
+
+手动触发：Actions → **Build Android APK** → Run workflow。
+
+好处是不用本地装 JDK/SDK；编译错误也会直接出现在日志里。
+默认只编 `arm64-v8a`（绝大多数手机），需要 32 位可选 `all`。
+
+---
+
 ## 目录
 
 ```
