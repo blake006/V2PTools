@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -8,8 +8,10 @@ const { Store, DEFAULT_SETTINGS } = require('./lib/store');
 const parser = require('./lib/parser');
 const { CoreManager } = require('./lib/core');
 const { Runner } = require('./lib/runner');
+const clash = require('./lib/clash');
 const { SystemProxy, DEFAULT_BYPASS } = require('./lib/sysproxy');
 const { Gateway, DEFAULT_PORT, ROUTE_MODES } = require('./lib/gateway');
+const { deriveProxyState, pickRouteMode, STATE_TEXT } = require('./lib/proxyState');
 
 const isDev = process.argv.includes('--dev');
 
@@ -162,18 +164,47 @@ function sendProxyState() {
     .catch(() => {});
 }
 
+/**
+ * 代理状态：见 electron/lib/proxyState.js 的状态机说明。
+ * 这里只负责组装 gateway / sysproxy / settings 三份数据。
+ */
 async function proxyStatus() {
   const gw = gateway ? gateway.status() : { running: false, port: 0, node: null };
   const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
   const s = store ? currentSettings() : {};
+
+  const state = deriveProxyState(gw, sys);
+
+  // 分流方式以谁为准：内核在跑用内核的实际值，没跑用保存的设置。
+  // 详见 proxyState.js 的 pickRouteMode 注释（这里曾出现「关掉代理后改模式不生效」）。
+  const routeMode = pickRouteMode(gw, s);
+  const routeLabel = (ROUTE_MODES[routeMode] || ROUTE_MODES.global).label;
+
+  // 每种状态给一句人话，避免用户对着徽标猜
+  const hint = {
+    off: '',
+    on: `已生效：系统流量 → ${sys.server}（${routeLabel}）`,
+    starting: '内核正在启动，请稍候…',
+    hijacked: `系统代理已被其它程序改为 ${sys.server || '未设置'}，本工具不再生效。重新开启即可抢回。`,
+    orphan: `系统代理仍指向 ${sys.server}，但代理内核已退出 —— 可能无法上网。点击可关闭并还原。`,
+    foreign: `系统代理当前指向 ${sys.server}（非本工具）。开启后会被接管。`,
+  }[state];
+
   return {
     gateway: gw,
     system: sys,
     platform: process.platform,
-    routeMode: gw.routeMode || s.routeMode || 'global',
+    routeMode,
+    routeLabel,
     routeModes: ROUTE_MODES,
+    state,
+    stateText: state === 'on' ? `${STATE_TEXT.on}· ${routeLabel}` : STATE_TEXT[state] || STATE_TEXT.off,
+    hint,
+    healthy: state === 'on',
     // 「真正生效」= 内核在跑 且 系统代理指向这个内核端口
-    on: !!(gw.running && sys.active && sys.server === `127.0.0.1:${gw.port}`),
+    on: state === 'on',
+    // 需要用户注意的异常态
+    alert: state === 'hijacked' || state === 'orphan' || state === 'foreign',
   };
 }
 
@@ -223,6 +254,80 @@ async function disableSystemProxy() {
   sendProxyState();
   if (restoreErr) throw new Error('还原系统代理失败：' + restoreErr.message);
   return proxyStatus();
+}
+
+/* ------------------------------------------------------------------ */
+/* 代理状态看守：把「已关闭」之外的异常态主动推给界面                     */
+/* ------------------------------------------------------------------ */
+
+let watchTimer = null;
+let lastWatchSig = '';
+let watchFails = 0;
+
+/**
+ * 定期自检：
+ *  1. 内核是否还活着（external-controller + mixed 端口）
+ *  2. 系统代理是否还指向本工具（防止被其它软件改掉）
+ *  3. 每 30s 做一次真实出口探测，保证绿灯不是假的
+ * 只有状态签名变化时才推送，避免界面频繁重绘。
+ *
+ * 空闲时（系统代理没开）自动放慢到 20s，别为了看一个「还是关着」白白跑 reg query。
+ */
+const WATCH_IDLE_MS = 20000;
+const WATCH_ACTIVE_MS = 5000;
+const WATCH_MAX_BACKOFF = 60000;
+
+function startProxyWatch() {
+  if (watchTimer) return;
+  let tick = 0;
+
+  const schedule = () => {
+    const active = !!(gateway && gateway.running);
+    // 连续失败时指数退避，避免在受限环境下疯狂刷日志
+    const base = active ? WATCH_ACTIVE_MS : WATCH_IDLE_MS;
+    const delay = watchFails ? Math.min(base * Math.pow(2, watchFails), WATCH_MAX_BACKOFF) : base;
+    watchTimer = setTimeout(run, delay);
+  };
+
+  const run = async () => {
+    watchTimer = null;
+    if (!gateway || !win || win.isDestroyed()) return schedule();
+    tick += 1;
+    try {
+      // 1. 内核存活自检（不依赖外部命令，先做）
+      if (gateway.running) {
+        const alive = await gateway.alive();
+        gateway.aliveFlag = alive;
+        if (!alive) bootLog('看守：网关内核无响应，标记为异常');
+        // 3. 每 30s（约 6 个 tick）做一次真实出口探测
+        if (alive && tick % 6 === 0) await gateway.probeWithCache({ timeout: 8000 });
+      } else {
+        gateway.aliveFlag = false;
+      }
+
+      // 2. 系统代理是否被外部改动（这一步要调 reg query）
+      const st = await proxyStatus();
+      watchFails = 0;
+      const probe = st.gateway.lastProbe;
+      const sig = `${st.state}|${st.gateway.port}|${st.gateway.node ? st.gateway.node.id : ''}|${st.system.server}|${probe ? probe.ok : ''}|${probe ? probe.ip : ''}`;
+      if (sig !== lastWatchSig) {
+        lastWatchSig = sig;
+        win.webContents.send('proxy:state', st);
+      }
+    } catch (e) {
+      // 权限受限（沙箱）或系统调用失败：计数退避，只在首次记录，别刷屏
+      watchFails += 1;
+      if (watchFails === 1) bootLog('看守循环异常（将自动退避重试）: ' + e.message);
+    }
+    schedule();
+  };
+
+  schedule();
+}
+
+function stopProxyWatch() {
+  if (watchTimer) clearTimeout(watchTimer);
+  watchTimer = null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -279,6 +384,8 @@ app.whenReady().then(async () => {
   createWindow();
   bootLog('窗口创建完成');
 
+  startProxyWatch();
+
   // 自动化冒烟测试用：启动后自动退出（会走完整的还原 + 退出流程）
   if (process.env.V2P_EXIT_AFTER) {
     setTimeout(() => app.quit(), Number(process.env.V2P_EXIT_AFTER) || 5000);
@@ -298,6 +405,7 @@ app.on('before-quit', async (e) => {
   if (quitting) return;
   quitting = true;
   e.preventDefault();
+  stopProxyWatch();
   try {
     // 退出前必须还原系统代理，否则用户会「上不了网」
     if (sysproxy) await sysproxy.restore().catch(() => {});
@@ -419,6 +527,34 @@ ipcMain.handle('export:save', async (e, payload) => {
   if (r.canceled || !r.filePath) return { ok: false };
   fs.writeFileSync(r.filePath, content, 'utf8');
   return { ok: true, path: r.filePath };
+});
+
+/** 导出为 Clash / mihomo 配置（YAML）—— 同步自 IPHealth 1.0.3 */
+ipcMain.handle('export:clash', async (e, payload) => {
+  const { nodes, defaultName, opts } = payload || {};
+  let built;
+  try {
+    built = clash.buildClashYaml(nodes || [], opts || {});
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const r = await dialog.showSaveDialog(win, {
+    title: '导出 Clash 配置',
+    defaultPath: defaultName || 'v2ptools-clash',
+    filters: [{ name: 'Clash 配置', extensions: ['yaml', 'yml'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(r.filePath, built.text, 'utf8');
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  return { ok: true, path: r.filePath, count: built.count };
+});
+
+ipcMain.handle('clipboard:write', (e, text) => {
+  clipboard.writeText(String(text == null ? '' : text));
+  return true;
 });
 
 ipcMain.handle('theme:set', (e, theme) => {

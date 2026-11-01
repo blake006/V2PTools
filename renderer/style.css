@@ -482,6 +482,7 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
   box-shadow: var(--shadow); animation: toastIn .2s ease; max-width: 560px;
 }
 .toast.err { border-color: rgba(240,96,90,.5); color: #ffb3af; }
+.toast.warn { border-color: rgba(224,168,60,.5); color: #f0c674; }
 .toast.ok { border-color: rgba(62,207,142,.45); }
 @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
@@ -629,6 +630,20 @@ input[type='range']::-webkit-slider-thumb {
 }
 .proxy-badge:hover { color: var(--text); border-color: var(--accent); }
 .proxy-badge.ok { color: var(--ok); border-color: rgba(62, 207, 142, 0.4); background: var(--ok-soft); }
+
+/* 异常态：黄=被外部改动/指向别处（能上网但没走本工具）；红=失联/启动中（可能断网） */
+.proxy-badge.warn { color: #e0a83c; border-color: rgba(224, 168, 60, 0.45); background: rgba(224, 168, 60, 0.12); }
+.proxy-badge.warn .dot { background: #e0a83c; box-shadow: 0 0 6px #e0a83c; }
+.proxy-badge.err { color: var(--bad); border-color: rgba(240, 90, 90, 0.45); background: rgba(240, 90, 90, 0.12); }
+.proxy-badge.err .dot { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
+
+/* 异常态呼吸灯，让人注意到 */
+.proxy-badge.warn .dot,
+.proxy-badge.err .dot { animation: proxyPulse 1.6s ease-in-out infinite; }
+@keyframes proxyPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
 
 .use-pill { font-size: 10px; padding: 1px 6px; margin-left: 2px; }
 

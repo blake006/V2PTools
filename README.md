@@ -17,18 +17,45 @@
 | 修改系统代理 | ❌ 明确不做 | ✅ 工具栏按钮 / 行内按钮 / 详情抽屉 |
 | 内核用途 | 每节点一个监听端口，仅用于检测 | 检测内核 + **独立的系统代理内核**（互不干扰） |
 | 退出行为 | 关内核 | 关内核 **并还原系统代理** |
+| 分流方式 | — | ✅ 全局 / 绕过大陆 / 仅名单 |
+| 代理状态显示 | 单节点检测结果 | ✅ 6 态系统代理状态机 + 后台自检 |
 
 新增文件：
 
 ```
 electron/lib/sysproxy.js    Windows 系统代理读写（注册表 + 备份还原 + 生效刷新）
-electron/lib/gateway.js     系统代理专用内核（单 mixed 端口 + MATCH,PROXY）
+electron/lib/gateway.js     系统代理专用内核（单 mixed 端口 + 分流规则）
+electron/lib/proxyState.js  系统代理状态机（6 态，纯函数）
+electron/lib/ruleFormat.js  分流规则文本 → payload 转换 + 格式校验
+electron/lib/clash.js       导出 Clash / mihomo 配置
 scripts/test-sysproxy.js    系统代理模块测试（31 项）
-scripts/test-gateway.js     网关配置 + 真实内核启动测试（24 项）
+scripts/test-gateway.js     网关配置 + 真实内核启动测试（33 项）
+scripts/test-proxystate.js  代理状态机测试（18 项）
+scripts/test-ruleformat.js  分流规则格式测试（20 项）
+scripts/test-clash.js       Clash 配置导出测试（12 项，含 mihomo -t 校验）
 ```
 
 改动文件：`electron/main.js`、`electron/preload.js`、`electron/lib/store.js`、
 `renderer/index.html`、`renderer/app.js`、`renderer/style.css`、`package.json`、`build/portable.nsi`。
+
+---
+
+## 从 IPHealth 同步的内容
+
+上游 `blake006/IPHealth` 的以下改动已合并（截至 1.0.3）：
+
+| 上游提交 | 内容 | 状态 |
+|---|---|---|
+| `b28ad61a` | 订阅拉取改用 Chromium 网络栈（自动跟随系统代理、HTTP/2） | ✅ 已同步 |
+| `c086dbb1` | 代理地址格式容错 + DNS 污染 IP 识别与可读诊断 | ✅ 已同步 |
+| `743d6279` | 导出 Clash 配置、检测范围（仅测未测 / 重测失败） | ✅ 已同步 |
+
+**未同步**的部分及原因：
+
+- 「来源分面筛选」「节点右键菜单」：改动集中在 `renderer/app.js`，与 V2PTools 已分叉的
+  渲染层（系统代理按钮 / 徽标 / 分流菜单）冲突面大，需要逐段手工移植，收益低于风险。
+- 订阅拉取代理设置项：上游只加了 UI 与 `normalizeProxy()`，`import:fetch` 调用点并未真正
+  传参，属于半成品，等上游接线完成再跟进。
 
 ---
 
@@ -45,6 +72,100 @@ scripts/test-gateway.js     网关配置 + 真实内核启动测试（24 项）
 5. 已开启时点其它节点的电源图标 = **无缝换节点**（端口不变，不重新写注册表）。
 
 开启后标题栏徽标变绿，显示当前出口节点；工具栏按钮显示 `代理 :7890`。再点一次即关闭并还原。
+
+---
+
+## 代理状态显示
+
+徽标不只是一个开关 —— 它会把**系统代理的真实处境**说清楚。后台每 5 秒自检一次
+（内核存活 + 系统代理是否还指向本工具），每 30 秒做一次真实出口探测，状态变了才推送。
+
+| 徽标 | 状态 | 含义 | 点击行为 |
+|---|---|---|---|
+| 🟢 绿 | `on` | 内核在跑 + 系统代理正确指向本机网关 | 关闭并还原 |
+| 🔴 红闪 | `orphan` | **系统代理还指着网关，但内核已死了 → 可能上不了网** | 立即还原，抢救网络 |
+| 🟡 黄闪 | `hijacked` | 内核在跑，但系统代理被别的程序改掉/关掉了 | 重新接管 |
+| 🟡 黄闪 | `foreign` | 系统代理开着，但指向别的地址（不是本工具） | 开启后接管 |
+| 🔴 红闪 | `starting` | 内核在跑但存活自检没过（刚启动或僵住） | — |
+| ⚪ 灰 | `off` | 系统代理未开启 | 把选中节点设为代理 |
+
+以前这些异常全都被归成「已关闭」，用户完全不知道自己的电脑正处在什么状态里。
+现在：
+
+- **失联（orphan）**：启动时主动弹红色告警，并自动帮忙还原系统代理，避免「代理指向死端口」
+  把整台电脑的网断掉。徽标悬浮提示会给出当前指向与处置建议。
+- **被劫持（hijacked）**：内核其实还在跑，只是系统代理被别的软件抢走了。点一下就能抢回来，
+  不用先关闭再开启。
+- **链路真实可用性**：绿灯旁边会带上探测到的出口 IP；探测失败则显示「链路异常」，
+  避免出现「绿灯但根本连不上」的假象。悬浮提示里还有节点名、分流方式、已运行时长。
+
+状态机实现见 `electron/lib/proxyState.js`（纯函数，18 项单测覆盖），
+自检循环见 `electron/main.js` 的 `startProxyWatch()`。
+
+---
+
+## 分流方式
+
+工具栏「系统代理」旁的下拉菜单可切换三种方式，已开启时立即生效（端口与系统代理都不动）：
+
+| 方式 | 规则 | 说明 |
+|---|---|---|
+| 全局代理 | `MATCH,PROXY` | 所有流量走节点 |
+| 绕过大陆 | `RULE-SET,cn-domain,DIRECT`<br>`RULE-SET,cn-cidr,DIRECT`<br>`MATCH,PROXY` | 国内域名/IP 直连，其余走节点（最实用） |
+| 仅名单代理 | `RULE-SET,gfw-domain,PROXY`<br>`MATCH,DIRECT` | 只有被墙域名走节点，其余直连 |
+
+规则数据来自 `Loyalsoldier/clash-rules`，通过 `npm run fetch-rules` 拉取并随包分发
+（运行时不需要联网）。当前约 11 万条 CN 域名、1 万条 CN IP 段、4.5 千条被墙域名。
+
+### 踩过的坑：规则格式静默失效
+
+早期 `fetch-rules.js` 按「每行一条裸规则」解析上游文本，但上游实际给的是 YAML payload
+片段（`payload:` + `- '+.x.com'`）。结果：
+
+- `payload:` 这一行本身被当成一条规则
+- `- '+.x.com'` 整行被当成一条规则
+
+生成的 12 万条规则**格式全部错误，一条都匹配不上**。mihomo 会静默接受这种文件
+（`ruleCount` 显示 12 万，看起来很正常），但实际流量全部落到 `MATCH` 兜底 ——
+表现为「绕过大陆模式下，百度等国内站点也打不开」。
+
+现在有三道防线：
+
+1. `electron/lib/ruleFormat.js` 统一处理两种文本形态，正确剥掉 `payload:` 容器行、
+   `- ` 列表前缀和任意层引号（20 项单测覆盖）
+2. `fetch-rules.js` 生成后立即用 `validatePayload()` 自检，不干净就报错退出
+3. `gateway.js` 启动时再校验一次规则文件，格式损坏直接抛错，不让它静默失效
+
+另外补了一个时序修复：`waitRulesLoaded()` 会等所有 rule-provider 的 `ruleCount > 0`
+才宣告就绪。11 万条域名规则的解析比 IP 段慢得多，不等的话用户刚开代理就访问站点
+会落到 `MATCH,PROXY`。
+
+### 踩过的坑：关掉代理后改分流方式不生效
+
+`proxyStatus()` 原本写 `gw.routeMode || settings.routeMode`。但 `gateway.stop()`
+不会重置 `routeMode`，所以「关闭代理 → 把模式从全局改成绕过大陆」时，界面读到的
+仍是上次运行残留的 `global`，看起来像设置没生效（实际下次开启会按新设置走，但界面骗人）。
+
+现在由 `pickRouteMode()` 决定优先级：**内核在跑以内核为准，没跑以设置为准**。
+
+### 怎么验证
+
+```bash
+npm run verify-routing    # 端到端：真实内核 + 真实规则，验三种模式的实际决策（24 项）
+npm run verify-switch     # 应用层：模式切换端口不变、规则热更新、非法值拒绝（28 项）
+npm run test-ruleformat   # 规则文本解析与格式校验（20 项）
+```
+
+`verify-routing` 的判定依据是内核日志里的真实决策行（`match X using Y` /
+`dial Y (match X)`），覆盖这些容易翻车的场景：
+
+- 三种模式各自的直连 / 代理走向
+- 子域跟随父域（`tieba.baidu.com` 命中 `+.baidu.com`）
+- 后缀陷阱（`baidu.com.evil.example` 不能被当成百度）
+- 不在名单里的真实域名（`example.com`）该走哪边走哪边
+
+> 注意：不要用「HTTP GET 走代理」来测域名分流 —— Node 会先做本地 DNS 解析，
+> 请求落到 IP 上，域名规则根本不会触发，测出来全是假结果。要用 CONNECT。
 
 ---
 

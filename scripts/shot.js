@@ -79,6 +79,21 @@ ipcMain.handle('store:get', (e, key) => {
 });
 ipcMain.handle('store:set', () => true);
 ipcMain.handle('theme:set', () => true);
+// 系统代理：截图里展示「已开启」的健康态，文案/徽标配色才看得出效果
+ipcMain.handle('proxy:status', () => ({
+  gateway: {
+    running: true, port: 7890, ctlPort: 7891, pid: 1234,
+    routeMode: 'bypass-cn', routeLabel: '绕过大陆',
+    node: { id: 'n1', name: 'HK-01 香港 IEPL', type: 'ss', server: '1.2.3.4', port: 443 },
+    startedAt: Date.now() - 754000, uptime: 754,
+    lastProbe: { ok: true, ip: '203.0.113.45', ms: 87, at: Date.now() - 12000, error: '' },
+    error: '',
+  },
+  system: { supported: true, active: true, server: '127.0.0.1:7890', bypass: 'localhost;127.*;<local>', proxyEnable: 1, lastError: '' },
+  platform: 'win32', routeMode: 'bypass-cn', routeLabel: '绕过大陆',
+  state: 'on', stateText: '系统代理 · 绕过大陆', hint: '', healthy: true, on: true, alert: false,
+}));
+ipcMain.handle('proxy:probe', () => ({ ok: true, ip: '203.0.113.45', ms: 87 }));
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({

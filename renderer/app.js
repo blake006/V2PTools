@@ -100,16 +100,17 @@ function healthText(score) {
   return '较差';
 }
 
-function toast(msg, type) {
+function toast(msg, type, duration) {
   const el = document.createElement('div');
   el.className = 'toast' + (type ? ' ' + type : '');
   el.textContent = msg;
   $('#toastWrap').appendChild(el);
+  const ttl = Number(duration) > 0 ? Number(duration) : 2600;
   setTimeout(() => {
     el.style.transition = 'opacity .25s';
     el.style.opacity = '0';
     setTimeout(() => el.remove(), 260);
-  }, 2600);
+  }, ttl);
 }
 
 function setStatus(text) {
@@ -1105,11 +1106,21 @@ function setRunning(on) {
   }
 }
 
-async function runTest(mode, onlySelected) {
+async function runTest(mode, onlySelected, scope) {
   if (state.running) return toast('已有检测任务在进行', 'err');
   if (state.syncing) return toast('正在更新订阅，请稍后再检测', 'err');
-  let targets = onlySelected ? state.nodes.filter((n) => state.selected.has(n.id)) : state.nodes.slice();
-  if (!targets.length) return toast(onlySelected ? '请先选择节点' : '没有可检测的节点', 'err');
+  let targets;
+  if (scope === 'pending') {
+    targets = state.nodes.filter((n) => n.status === 'idle' || n.status === 'testing');
+  } else if (scope === 'failed') {
+    targets = state.nodes.filter((n) => n.status === 'fail');
+  } else {
+    targets = onlySelected ? state.nodes.filter((n) => state.selected.has(n.id)) : state.nodes.slice();
+  }
+  if (!targets.length) {
+    const msg = scope === 'pending' ? '没有未检测的节点' : scope === 'failed' ? '没有失败的节点' : onlySelected ? '请先选择节点' : '没有可检测的节点';
+    return toast(msg, 'err');
+  }
 
   targets.forEach((n) => {
     n.status = 'testing';
@@ -1309,6 +1320,7 @@ function renderProxyState(st) {
   const node = gw.node;
   const routeMode = currentRouteMode();
   const routeLabel = ROUTE_LABEL[routeMode] || '全局代理';
+  const pstate = s.state || (on ? 'on' : 'off');
 
   const btn = $('#btnProxy');
   btn.classList.toggle('on', on);
@@ -1317,14 +1329,62 @@ function renderProxyState(st) {
   btn.title = on ? `系统代理已开启 → 127.0.0.1:${gw.port}（${routeLabel}），点击关闭` : '把选中的节点设为系统代理';
 
   const badge = $('#proxyBadge');
-  badge.classList.toggle('ok', on);
-  badge.classList.toggle('err', !!(!on && (s.system && s.system.lastError)));
-  $('#proxyBadgeText').textContent = on
-    ? `系统代理 · ${routeLabel}`
-    : '系统代理 已关闭';
-  badge.title = on
-    ? `已开启：127.0.0.1:${gw.port}\n出口：${node ? node.name || node.server : '—'}\n分流：${routeLabel}`
-    : '点击把选中节点设为系统代理';
+  badge.classList.toggle('ok', pstate === 'on');
+  badge.classList.toggle('warn', pstate === 'hijacked' || pstate === 'foreign');
+  badge.classList.toggle('err', pstate === 'orphan' || pstate === 'starting');
+  badge.dataset.state = pstate;
+
+  // 徽标文案：每种异常态都要一眼看懂
+  const probe = gw.lastProbe;
+  let text;
+  if (pstate === 'on') {
+    text = `系统代理 · ${routeLabel}`;
+    if (probe) text += probe.ok ? ` · ${probe.ip}` : ' · 链路异常';
+  } else if (pstate === 'starting') {
+    text = '系统代理 启动中…';
+  } else if (pstate === 'hijacked') {
+    text = '系统代理 被外部修改';
+  } else if (pstate === 'orphan') {
+    text = '系统代理 已失联';
+  } else if (pstate === 'foreign') {
+    text = '系统代理 指向其它地址';
+  } else {
+    text = '系统代理 已关闭';
+  }
+  $('#proxyBadgeText').textContent = text;
+
+  // 悬浮提示：完整说清「怎么了 + 怎么办」
+  const lines = [];
+  if (pstate === 'on') {
+    lines.push(`✅ 已生效：系统流量 → 127.0.0.1:${gw.port}`);
+    lines.push(`出口节点：${node ? node.name || node.server : '—'}`);
+    lines.push(`分流：${routeLabel}`);
+    if (gw.uptime) lines.push(`已运行：${formatDuration(gw.uptime)}`);
+    if (probe) {
+      lines.push(probe.ok ? `链路探测：正常 · 出口 IP ${probe.ip}${probe.ms ? ` · ${probe.ms}ms` : ''}` : `链路探测：失败（${probe.error}）`);
+    }
+    lines.push('点击关闭并还原系统代理');
+  } else if (pstate === 'hijacked') {
+    lines.push('⚠️ 系统代理已开启，但被其它程序改动');
+    lines.push(`当前指向：${(s.system && s.system.server) || '未设置'}`);
+    lines.push(`本工具网关：127.0.0.1:${gw.port}（内核仍在运行）`);
+    lines.push('点击重新接管系统代理');
+  } else if (pstate === 'orphan') {
+    lines.push('⚠️ 危险：系统代理仍指向本工具，但内核已退出');
+    lines.push(`当前指向：${(s.system && s.system.server) || '—'}`);
+    lines.push('此状态下可能无法上网，点击可关闭并还原');
+  } else if (pstate === 'foreign') {
+    lines.push('系统代理已开启，但指向的是其它地址（非本工具）');
+    lines.push(`当前指向：${(s.system && s.system.server) || '—'}`);
+    lines.push('开启本工具代理后会被接管');
+  } else if (pstate === 'starting') {
+    lines.push('内核正在启动或暂时无响应…');
+  } else {
+    lines.push('系统代理未开启');
+    lines.push('点击把选中节点设为系统代理');
+  }
+  if (s.hint && pstate !== 'off' && pstate !== 'on') lines.push('— ' + s.hint);
+  badge.title = lines.join('\n');
 
   // 分流方式菜单的选中态
   $$('#proxyMenu [data-route]').forEach((el) => {
@@ -1337,6 +1397,16 @@ function renderProxyState(st) {
     state.__proxySig = sig;
     if (state.nodes.length) renderTable();
   }
+}
+
+/** 秒 → 1h 02m / 3m 20s */
+function formatDuration(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${s}s`;
 }
 
 /** 切换分流方式：已开启时立即生效（重启内核，端口与系统代理都不动） */
@@ -1451,7 +1521,23 @@ async function useNodeAsProxy(id) {
 }
 
 async function toggleSystemProxy() {
+  if (state.proxyBusy) return;
+  const pstate = (state.proxy && state.proxy.state) || (state.proxy && state.proxy.on ? 'on' : 'off');
+
+  // 失联态：内核已死但系统代理还指着它，优先抢救 —— 先还原系统代理
+  if (pstate === 'orphan') {
+    toast('检测到系统代理已失联，正在还原…', 'err');
+    return disableSystemProxy();
+  }
+  // 被外部改动 / 指向别处：直接抢回来（重新 apply 会覆盖）
+  if (pstate === 'hijacked' || pstate === 'foreign') {
+    const id = pickProxyNode() || (state.proxy && state.proxy.gateway && state.proxy.gateway.node && state.proxy.gateway.node.id);
+    if (!id) return toast('请先勾选一个节点，再接管系统代理', 'err');
+    toast('正在重新接管系统代理…');
+    return enableSystemProxyById(id);
+  }
   if (state.proxy && state.proxy.on) return disableSystemProxy();
+
   const id = pickProxyNode();
   if (!id) return toast('请先勾选一个节点，或在行末点击「设为系统代理」', 'err');
   return enableSystemProxyById(id);
@@ -1566,7 +1652,20 @@ async function init() {
     toast(msg || '代理内核异常退出', 'err');
     refreshProxyState();
   });
-  await refreshProxyState();
+
+  // 启动时主动告警：失联/被改动这类状态必须让用户第一眼就看到
+  const st = await refreshProxyState();
+  if (st && st.state === 'orphan') {
+    toast('系统代理已失联（内核未运行），可能无法上网 —— 点击顶部徽标可还原', 'err', 12000);
+  } else if (st && st.state === 'hijacked') {
+    toast('系统代理被其它程序改动，本工具已不生效', 'err', 10000);
+  } else if (st && st.state === 'foreign') {
+    toast(`系统代理当前指向 ${st.system.server}，并非本工具`, 'warn', 8000);
+  }
+  // 别在上次异常退出后留下「失联」状态：直接帮忙还原
+  if (st && st.state === 'orphan') {
+    setTimeout(() => disableSystemProxy(), 800);
+  }
 
   // 启动时自动更新订阅
   if (state.settings.autoSyncOnStart && state.sources.length) {
@@ -1672,7 +1771,9 @@ $$('#testMenu button').forEach((b) => {
   b.addEventListener('click', () => {
     $('#testMenu').classList.remove('open');
     const mode = b.dataset.mode;
-    if (mode === 'selected') runTest('full', true);
+    const scope = b.dataset.scope;
+    if (scope) runTest('full', false, scope);
+    else if (mode === 'selected') runTest('full', true);
     else runTest(mode, false);
   });
 });
@@ -1823,11 +1924,28 @@ $('#btnTheme').addEventListener('click', async () => {
 $('#btnExport').addEventListener('click', async () => {
   const format = await chooseExportFormat();
   if (!format) return;
+
+  // Clash 配置走独立通道：后端做格式转换 + 落盘
+  if (format === 'clash') {
+    // 与其它导出格式一致：优先已检测的节点，没有则用全部
+    const tested = sortedNodes().filter((n) => n.status !== 'idle');
+    const list = tested.length ? tested : sortedNodes();
+    if (!list.length) return toast('当前没有可导出的节点', 'err');
+    const r = await window.api.exportClash({
+      nodes: list,
+      defaultName: 'v2ptools-clash-' + new Date().toISOString().slice(0, 10),
+      opts: {},
+    });
+    if (r && r.ok) toast(`已导出 ${r.count} 个节点 → ${r.path}`, 'ok');
+    else if (r && !r.canceled) toast('导出失败：' + (r.error || '未知原因'), 'err');
+    return;
+  }
+
   const content = buildExport(format);
   const r = await window.api.exportFile({
     format,
     content,
-    defaultName: 'iphealth-' + new Date().toISOString().slice(0, 10),
+    defaultName: 'v2ptools-' + new Date().toISOString().slice(0, 10),
   });
   if (r && r.ok) toast('已导出到 ' + r.path, 'ok');
 });
@@ -1841,6 +1959,7 @@ function chooseExportFormat() {
       <div class="modal" style="width:380px">
         <div class="modal-head"><div class="modal-title">导出检测结果</div></div>
         <div class="modal-body" style="gap:8px">
+          <button class="btn" data-fmt="clash" style="justify-content:flex-start">Clash 配置（YAML，可直接给内核用）</button>
           <button class="btn" data-fmt="csv" style="justify-content:flex-start">CSV 表格（Excel 可直接打开）</button>
           <button class="btn" data-fmt="json" style="justify-content:flex-start">JSON（含完整字段）</button>
           <button class="btn" data-fmt="txt" style="justify-content:flex-start">原始链接（TXT）</button>

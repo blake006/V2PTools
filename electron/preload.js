@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('api', {
   cancelTest: () => ipcRenderer.invoke('test:cancel'),
 
   exportFile: (payload) => ipcRenderer.invoke('export:save', payload),
+  exportClash: (payload) => ipcRenderer.invoke('export:clash', payload),
+  copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
   openExternal: (url) => ipcRenderer.invoke('shell:open', url),
   openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
   setTheme: (theme) => ipcRenderer.invoke('theme:set', theme),
