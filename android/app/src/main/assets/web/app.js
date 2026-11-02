@@ -961,6 +961,33 @@
     if (state.running) stopProxy(); else startProxy(true);
   });
 
+  /**
+   * 代理自检：分别用「本机代理端口」和「直连」查一次出口 IP。
+   * 两个 IP 不一样 = 代理链路本身没问题，问题在系统层（Android 不允许 App 改系统代理，
+   * 必须去 Wi-Fi 高级设置里手填，或者用 VPN 模式）。
+   */
+  $('#btnProxyCheck').addEventListener('click', async function () {
+    var port = state.settings.mixedPort;
+    toast('正在检查代理链路…');
+    var via = await call('exit', { port: port, timeout: 8000 });
+    var direct = await call('exit', { port: 0, timeout: 8000 });
+
+    var lines = [];
+    lines.push(via && via.ok
+      ? '经代理 ' + '127.0.0.1:' + port + ' 出口：' + via.ip + ' ' + (via.country || '')
+      : '代理端口不通：' + ((via && via.error) || '未知'));
+    lines.push(direct && direct.ok
+      ? '直连出口：' + direct.ip + ' ' + (direct.country || '')
+      : '直连探测失败（不影响判断）');
+
+    if (via && via.ok && direct && direct.ok && via.ip === direct.ip) {
+      lines.push('两个 IP 相同：节点可能没生效，换节点或检查订阅');
+    } else if (via && via.ok) {
+      lines.push('代理链路正常。要让浏览器等 App 也走它，需要在 Wi-Fi 高级设置里填 ' + '127.0.0.1:' + port);
+    }
+    alert(lines.join('\n'));
+  });
+
   $$('[data-export]').forEach(function (b) {
     b.addEventListener('click', function () { exportAs(b.dataset.export); });
   });
@@ -999,8 +1026,7 @@
     closeSheets();
   });
 
-  /** 把当前设置回填到「更多」面板（存毫秒/字节，界面显示秒/MB） */
-  function fillSettings() {
+  /** 把当前设置回填到「更多」面板（存毫秒/字节，界面显示秒/MB） */  function fillSettings() {
     $('#setConcurrency').value = state.settings.concurrency;
     $('#setTimeout').value = Math.round((state.settings.latencyTimeout || 6000) / 100) / 10;
     $('#setSpeedBytes').value = Math.round((state.settings.speedBytes || 5000000) / 1000000);
