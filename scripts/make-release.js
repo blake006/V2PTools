@@ -62,7 +62,7 @@ const BODY = `## 1.0.7 — 同步 IPHealth 1.0.10
 
 - \`portable.exe\`：单文件免安装，双击即用（推荐）
 - \`.zip\`：解压版
-- \`.apk\`：安卓版 1.0.7（debug 签名，需允许未知来源安装；要求 Android 8.0+、arm64）
+- \`.apk\`：安卓版 1.0.8（debug 签名，需允许未知来源安装；要求 Android 8.0+、arm64）
 `;
 
 function fmt(b) {
@@ -136,7 +136,7 @@ async function uploadAsset(releaseId, file) {
   const assets = [
     path.join(ROOT, 'dist', 'V2PTools-1.0.7-win-x64-portable.exe'),
     path.join(ROOT, 'dist', 'V2PTools-1.0.7-win-x64.zip'),
-    path.join(ROOT, 'dist', 'V2PTools-android-1.0.7-debug.apk'),
+    path.join(ROOT, 'dist', 'V2PTools-android-1.0.8-debug.apk'),
   ];
 
   for (const f of assets) {
