@@ -143,6 +143,15 @@
     </div>
 
     <div class="group">
+      <div class="group-title">体检</div>
+      <div class="row2">
+        <button class="btn" id="btnQuickTest">仅测延迟</button>
+        <button class="btn" id="btnFullTest">完整体检</button>
+      </div>
+      <div class="hint">仅测延迟最快（每节点一次探测）；完整体检额外测出口 IP、DNSBL 与速度，节点多时较慢</div>
+    </div>
+
+    <div class="group">
       <div class="group-title">订阅源</div>
       <div class="src-list" id="sourceList"></div>
       <button class="btn full" id="btnSyncSources">更新全部订阅</button>
@@ -163,6 +172,7 @@
       <label class="field"><span>并发数</span><input id="setConcurrency" type="number" min="1" max="32" /></label>
       <label class="field"><span>延迟超时（秒）</span><input id="setTimeout" type="number" min="1" max="30" step="0.5" /></label>
       <label class="field"><span>测速大小（MB）</span><input id="setSpeedBytes" type="number" min="1" max="50" step="1" /></label>
+      <button class="btn full" id="btnTheme">切换浅色</button>
       <button class="btn full" id="btnSaveSettings">保存设置</button>
     </div>
 

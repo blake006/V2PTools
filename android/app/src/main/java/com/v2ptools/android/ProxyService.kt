@@ -210,11 +210,17 @@ class ProxyService : VpnService() {
 
     private fun startForegroundCompat(title: String, text: String) {
         val intent = Intent(this, MainActivity::class.java)
-        val pi = PendingIntent.getActivity(
-            this, 0, intent,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            else PendingIntent.FLAG_UPDATE_CURRENT
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pi = PendingIntent.getActivity(this, 0, intent, flags)
+        // 通知栏直接关代理：以前点通知只能回前台，还得自己再点一次开关
+        val stopPi = PendingIntent.getService(
+            this, 1,
+            Intent(this, ProxyService::class.java).apply { action = ACTION_STOP },
+            flags
         )
         val n: Notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, App.CHANNEL_CORE)
@@ -222,6 +228,7 @@ class ProxyService : VpnService() {
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setContentIntent(pi)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "关闭代理", stopPi)
                 .setOngoing(true)
                 .build()
         } else {
@@ -231,6 +238,7 @@ class ProxyService : VpnService() {
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setContentIntent(pi)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "关闭代理", stopPi)
                 .setOngoing(true)
                 .build()
         }

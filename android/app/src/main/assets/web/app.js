@@ -95,6 +95,7 @@
     mixedPort: 7890,
     ctlPort: 9090,
     listenerBase: 20000,
+    theme: 'dark',
     latencyUrls: [
       'http://cp.cloudflare.com/generate_204',
       'http://www.gstatic.com/generate_204',
@@ -566,10 +567,51 @@
           '<div class="src-row">' +
           '<div class="src-main"><b>' + esc(s.group || '订阅') + '</b>' +
           '<span>' + (s.count || 0) + ' 个 · ' + when + '</span>' + err + '</div>' +
-          '</div>'
+          '<div class="src-actions">' +
+          '<button class="mini" data-src-update="' + s.id + '">更新</button>' +
+          '<button class="mini" data-src-del="' + s.id + '">删除</button>' +
+          '</div></div>'
         );
       })
       .join('');
+  }
+
+  /** 单源更新：拉取 → 解析 → 合并，返回 { ok, added, viaNode } */
+  async function syncSource(src) {
+    var got = await fetchSubText(src.url);
+    if (!got.text) {
+      src.error = got.why || '拉取失败';
+      return { ok: false, added: 0 };
+    }
+    var parsed = null;
+    try {
+      parsed = V2P.parser.parseText(got.text, { plainType: 'socks5', source: src.url });
+    } catch (e) {
+      src.error = e.message;
+      return { ok: false, added: 0 };
+    }
+    if (!parsed || !parsed.nodes.length) {
+      src.error = '未解析到节点';
+      return { ok: false, added: 0 };
+    }
+    var added = addNodes(parsed.nodes, src.url);
+    src.count = parsed.nodes.length;
+    src.lastSync = Date.now();
+    src.error = '';
+    return { ok: true, added: added, viaNode: got.viaNode };
+  }
+
+  async function syncOneSource(id) {
+    if (state.testing) return toast('体检进行中，稍后再更新订阅', 'err');
+    var src = state.sources.filter(function (s) { return s.id === id; })[0];
+    if (!src) return;
+    toast('正在更新订阅…');
+    var r = await syncSource(src);
+    save();
+    renderAll();
+    renderSources();
+    if (!r.ok) return toast('更新失败：' + (src.error || '未知'), 'err', 5000);
+    toast('已更新：新增 ' + r.added + ' 个' + (r.viaNode ? '（经节点「' + r.viaNode + '」）' : ''), 'ok', 4000);
   }
 
   async function syncAllSources() {
@@ -583,30 +625,12 @@
       var src = state.sources[i];
       toast('更新订阅 ' + (i + 1) + '/' + state.sources.length + '…', '', 1500);
       // eslint-disable-next-line no-await-in-loop
-      var got = await fetchSubText(src.url);
-      if (!got.text) {
-        src.error = got.why || '拉取失败';
-        failed += 1;
-        continue;
+      var r = await syncSource(src);
+      if (!r.ok) failed += 1;
+      else {
+        added += r.added;
+        if (r.viaNode) viaCount += 1;
       }
-      if (got.viaNode) viaCount += 1;
-      var parsed = null;
-      try {
-        parsed = V2P.parser.parseText(got.text, { plainType: 'socks5', source: src.url });
-      } catch (e) {
-        src.error = e.message;
-        failed += 1;
-        continue;
-      }
-      if (!parsed || !parsed.nodes.length) {
-        src.error = '未解析到节点';
-        failed += 1;
-        continue;
-      }
-      added += addNodes(parsed.nodes, src.url);
-      src.count = parsed.nodes.length;
-      src.lastSync = Date.now();
-      src.error = '';
     }
 
     save();
@@ -905,8 +929,8 @@
 
   /* ================= 导出 ================= */
 
-  function buildExport(kind) {
-    var list = sortedNodes();
+  function buildExport(kind, list) {
+    list = list || sortedNodes();
     if (!list.length) list = state.nodes;
     if (!list.length) {
       toast('没有可导出的节点', 'err');
@@ -951,9 +975,23 @@
   }
 
   async function exportAs(kind) {
-    var e = buildExport(kind);
+    var all = sortedNodes();
+    if (!all.length) return toast('没有可导出的节点', 'err');
+
+    var list = all;
+    // 上千节点时 YAML/JSON 序列化是同步的，会按住主线程；先给反馈并设上限
+    if (all.length > 3000) {
+      if (!confirm('共 ' + all.length + ' 个节点，导出会比较慢。只导出前 3000 个？')) return;
+      list = all.slice(0, 3000);
+    }
+
+    toast('正在生成 ' + String(kind).toUpperCase() + '…', '', 2000);
+    // 让提示先渲染出来，再做同步序列化
+    await new Promise(function (r) { setTimeout(r, 40); });
+
+    var e = buildExport(kind, list);
     if (!e) return;
-    var r = await call('file.save', { name: e.name, content: e.content });
+    var r = await call('file.save', { name: e.name, content: e.content }, 120000);
     if (r && r.ok) toast('已导出 ' + e.count + ' 个节点', 'ok');
     else if (r && !r.canceled) toast('导出失败：' + ((r && r.error) || ''), 'err');
   }
@@ -1019,6 +1057,30 @@
     openSheet('sheetMore');
   });
   $('#btnSyncSources').addEventListener('click', syncAllSources);
+  $('#btnQuickTest').addEventListener('click', function () {
+    closeSheets();
+    runTest('latency');
+  });
+  $('#btnFullTest').addEventListener('click', function () {
+    closeSheets();
+    runTest('full');
+  });
+
+  // 订阅源单条更新 / 删除（节点本身不删，只移除这条记录）
+  $('#sourceList').addEventListener('click', function (e) {
+    var up = e.target.getAttribute && e.target.getAttribute('data-src-update');
+    if (up) {
+      syncOneSource(up);
+      return;
+    }
+    var del = e.target.getAttribute && e.target.getAttribute('data-src-del');
+    if (del) {
+      state.sources = state.sources.filter(function (s) { return s.id !== del; });
+      save();
+      renderSources();
+      toast('已移除该订阅源（节点保留）', 'ok');
+    }
+  });
   $('#btnTest').addEventListener('click', function () {
     // 检测中再点一次 = 停止
     if (state.testing) {
@@ -1177,11 +1239,26 @@
     closeSheets();
   });
 
-  /** 把当前设置回填到「更多」面板（存毫秒/字节，界面显示秒/MB） */  function fillSettings() {
+  /** 把当前设置回填到「更多」面板（存毫秒/字节，界面显示秒/MB） */
+  function fillSettings() {
     $('#setConcurrency').value = state.settings.concurrency;
     $('#setTimeout').value = Math.round((state.settings.latencyTimeout || 6000) / 100) / 10;
     $('#setSpeedBytes').value = Math.round((state.settings.speedBytes || 5000000) / 1000000);
+    var btn = $('#btnTheme');
+    if (btn) btn.textContent = state.settings.theme === 'light' ? '切换深色' : '切换浅色';
   }
+
+  /** 主题：只切 body 上的类，颜色全在 CSS 变量里 */
+  function applyTheme() {
+    document.body.classList.toggle('light', state.settings.theme === 'light');
+  }
+
+  $('#btnTheme').addEventListener('click', function () {
+    state.settings.theme = state.settings.theme === 'light' ? 'dark' : 'light';
+    applyTheme();
+    fillSettings();
+    save();
+  });
 
   $('#btnSaveSettings').addEventListener('click', function () {
     state.settings.concurrency = clamp(parseInt($('#setConcurrency').value, 10) || 6, 1, 16);
@@ -1208,6 +1285,7 @@
 
   async function boot() {
     await load();
+    applyTheme();
     renderAll();
 
     var info = await call('app.info', {});

@@ -13,6 +13,8 @@
   --ok-soft: rgba(62, 207, 142, 0.12);
   --warn-soft: rgba(224, 168, 60, 0.12);
   --bad-soft: rgba(240, 90, 90, 0.12);
+  --bar-bg: rgba(14, 16, 21, 0.92);
+  --shadow: rgba(0, 0, 0, 0.45);
   --radius: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
@@ -46,7 +48,7 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  background: rgba(14, 16, 21, 0.92);
+  background: var(--bar-bg);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
 }
@@ -223,7 +225,7 @@ body {
   display: flex;
   gap: 8px;
   padding: 9px 14px calc(9px + var(--safe-b));
-  background: rgba(14, 16, 21, 0.96);
+  background: var(--bar-bg);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--border);
   z-index: 30;
@@ -352,7 +354,7 @@ textarea:focus, input:focus { border-color: var(--accent); }
   font-size: 12.5px;
   padding: 9px 14px;
   border-radius: 10px;
-  box-shadow: 0 6px 22px rgba(0,0,0,.45);
+  box-shadow: 0 6px 22px var(--shadow);
   animation: toastIn .18s ease;
   word-break: break-word;
 }
@@ -379,3 +381,24 @@ textarea:focus, input:focus { border-color: var(--accent); }
 .src-main b { font-size: 12.5px; font-weight: 550; }
 .src-main span { font-size: 11px; color: var(--faint); }
 .src-err { font-size: 11px; color: var(--bad); }
+
+/* 浅色主题：只覆盖颜色变量，布局不变 */
+body.light {
+  --bg: #f5f7fb;
+  --bg-elev: #ffffff;
+  --bg-elev2: #f2f5fa;
+  --border: #e1e7f0;
+  --text: #1b2230;
+  --dim: #5a6478;
+  --faint: #8a93a6;
+  --accent: #3b73e8;
+  --ok: #18a06a;
+  --warn: #b8791a;
+  --bad: #d0453f;
+  --ok-soft: rgba(24, 160, 106, 0.12);
+  --warn-soft: rgba(184, 121, 26, 0.12);
+  --bad-soft: rgba(208, 69, 63, 0.12);
+  --bar-bg: rgba(245, 247, 251, 0.94);
+  --shadow: rgba(20, 30, 50, 0.14);
+}
+body.light .sheet-mask { background: rgba(20, 30, 50, .38); }
