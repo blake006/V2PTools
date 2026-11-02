@@ -243,6 +243,18 @@ class MainActivity : AppCompatActivity() {
                     a.optInt("timeout", 15000)
                 )
                 "exit" -> return Probe.exitInfo(a.optInt("port"), a.optInt("timeout", 8000))
+                "sub.fetch" -> {
+                    val url = a.optString("url")
+                    if (url.isEmpty()) return JSONObject().put("ok", false).put("error", "订阅地址为空")
+                    // 没显式给端口就自己判断：内核在跑就用它的 mixed 端口走代理
+                    val port = if (a.has("port")) {
+                        a.optInt("port", 0)
+                    } else {
+                        val st = ProxyService.instance?.statusJson() ?: MihomoCore.status(this@MainActivity)
+                        if (st.optBoolean("running")) st.optInt("mixedPort", 0) else 0
+                    }
+                    return SubFetch.fetch(url, port, a.optInt("timeout", 25000))
+                }
                 "dnsbl" -> return Probe.dnsbl(a.optString("ip"), a.optInt("timeout", 6000))
                 "vpn.start" -> {
                     if (!LibcoreBridge.available()) {

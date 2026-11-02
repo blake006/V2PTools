@@ -70,6 +70,8 @@ scripts/test-subscribe.js   订阅拉取测试（9 项，含本地代理命中�
 
 - 导入（批量链接 / 订阅 / 单条 / 文件）、延迟抖动测速、出口 IP 归属地、DNSBL、健康度
 - 分组筛选、三种分流方式、导出 CSV / JSON / TXT / Clash
+- 订阅拉取走原生 `HttpURLConnection`：内核在跑就复用它的 mixed 端口做代理，
+  被 DNS 污染的订阅站也能拉；失败时回退直连并带回每一步的失败原因
 - 代理方式：mixed 端口 + 手动 Wi-Fi 代理；可选 VPN（需自行编译 libcore.aar）
 
 详见 [android/README.md](android/README.md)。

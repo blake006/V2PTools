@@ -373,11 +373,36 @@
   async function importSubscription(url) {
     if (!/^https?:\/\//i.test(url)) return toast('请输入 http(s) 开头的订阅地址', 'err');
     toast('正在拉取订阅…');
+
+    var text = '';
+    var why = '';
+
+    // 1) 原生拉取：内核在跑就走它的 mixed 端口。WebView 的 fetch 只能直连，
+    //    而这类订阅站域名普遍被 DNS 污染，直连一定超时。
     try {
-      // WebView 里直接 fetch，走系统网络（若已开代理则自动跟随）
-      var res = await fetch(url, { headers: { Accept: '*/*' } });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      var text = await res.text();
+      var port = state.proxy && state.proxy.running
+        ? (state.proxy.mixedPort || state.settings.mixedPort)
+        : 0;
+      var r = await call('sub.fetch', { url: url, port: port, timeout: 25000 });
+      if (r && r.ok && r.text) text = r.text;
+      else why = (r && r.error) || '原生拉取失败';
+    } catch (e) {
+      why = e.message || '原生拉取失败';
+    }
+
+    // 2) 回退 WebView fetch（桌面预览、或原生通道不可用时）
+    if (!text) {
+      try {
+        var res = await fetch(url, { headers: { Accept: '*/*' } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        text = await res.text();
+      } catch (e) {
+        toast('订阅拉取失败：' + (why || e.message), 'err', 6000);
+        return;
+      }
+    }
+
+    try {
       var added = parseAndAdd(text, url);
       if (added > 0) {
         var host = '';
@@ -393,7 +418,7 @@
       }
       closeSheets();
     } catch (e) {
-      toast('订阅拉取失败：' + e.message, 'err', 5000);
+      toast('订阅解析失败：' + e.message, 'err', 5000);
     }
   }
 
