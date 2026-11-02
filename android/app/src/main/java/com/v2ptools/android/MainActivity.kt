@@ -202,9 +202,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startVpnService(cfg: JSONObject) {
+        // 配置写文件，Intent 只带路径：大 YAML 走 extra 会触发 TransactionTooLargeException
+        val f = ProxyService.pendingConfigFile(this, "pending-vpn.yaml")
+        try {
+            f.writeText(cfg.optString("config"), Charsets.UTF_8)
+        } catch (e: Exception) {
+        }
         val i = Intent(this, ProxyService::class.java).apply {
             action = ProxyService.ACTION_START_VPN
-            putExtra(ProxyService.EXTRA_CONFIG, cfg.optString("config"))
+            putExtra(ProxyService.EXTRA_CONFIG_PATH, f.absolutePath)
             putExtra(ProxyService.EXTRA_MIXED_PORT, cfg.optInt("mixedPort", 7890))
             putExtra(ProxyService.EXTRA_CTL_PORT, cfg.optInt("ctlPort", 9090))
             putExtra(ProxyService.EXTRA_ROUTE_MODE, cfg.optString("routeMode", "global"))
@@ -247,11 +253,14 @@ class MainActivity : AppCompatActivity() {
                     val ctl = a.optInt("ctlPort", 9090)
                     val mode = a.optString("routeMode", "global")
                     val n = a.optInt("nodeCount", 0)
-                    // 存原文，供服务被系统重建时兜底；不能 quote，否则配置里会多一层引号
-                    store.set(ProxyService.KEY_PENDING_CONFIG, cfg)
+                    // 配置先落盘，Intent 只传路径（几十字节）。
+                    // 之前直接把 YAML 塞 extra，节点多时超过 Binder 1MB 上限直接崩。
+                    val f = ProxyService.pendingConfigFile(this@MainActivity, "pending-config.yaml")
+                    f.writeText(cfg, Charsets.UTF_8)
+                    store.set(ProxyService.KEY_PENDING_CONFIG, "")
                     val i = Intent(this@MainActivity, ProxyService::class.java).apply {
                         action = ProxyService.ACTION_START_CORE
-                        putExtra(ProxyService.EXTRA_CONFIG, cfg)
+                        putExtra(ProxyService.EXTRA_CONFIG_PATH, f.absolutePath)
                         putExtra(ProxyService.EXTRA_MIXED_PORT, mixed)
                         putExtra(ProxyService.EXTRA_CTL_PORT, ctl)
                         putExtra(ProxyService.EXTRA_ROUTE_MODE, mode)

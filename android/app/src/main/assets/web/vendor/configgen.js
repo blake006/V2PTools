@@ -24,6 +24,9 @@
   var DEFAULT_CTL_PORT = 9090;
   var DEFAULT_LISTENER_BASE = 20000;
   var MAX_LISTENERS = 200;
+  // 写进配置的节点上限：节点再多也只取前 N 个。
+  // 配置体积直接决定生成耗时、跨桥字符串大小和内核内存，订阅动辄上千个时必须有上限。
+  var MAX_PROXIES = 400;
 
   var ROUTE_MODES = {
     global: { label: '全局代理', desc: '所有流量都走节点' },
@@ -132,8 +135,8 @@
     var names = [];
     var listeners = [];
 
-    // 所有节点都进代理池：否则「设为使用中」时第 201 个之后的节点在配置里根本不存在
-    nodes.forEach(function (node) {
+    // 所有节点都进代理池（有上限）：否则「设为使用中」时第 201 个之后的节点在配置里根本不存在
+    nodes.slice(0, MAX_PROXIES).forEach(function (node) {
       var name = uniqueName(node.name || node.server, used);
       names.push(name);
       proxies.push(toProxy(node, name));
@@ -209,7 +212,11 @@
       names: names,
       listeners: listeners,
       routeMode: routeMode,
-      routeLabel: ROUTE_MODES[routeMode].label
+      routeLabel: ROUTE_MODES[routeMode].label,
+      // 节点被截断时界面要提示「只取前 N 个」，避免用户以为后面的节点也在配置里
+      total: nodes.length,
+      used: Math.min(nodes.length, MAX_PROXIES),
+      truncated: nodes.length > MAX_PROXIES
     };
   }
 
@@ -227,6 +234,7 @@
     DEFAULT_MIXED_PORT: DEFAULT_MIXED_PORT,
     DEFAULT_CTL_PORT: DEFAULT_CTL_PORT,
     DEFAULT_LISTENER_BASE: DEFAULT_LISTENER_BASE,
-    MAX_LISTENERS: MAX_LISTENERS
+    MAX_LISTENERS: MAX_LISTENERS,
+    MAX_PROXIES: MAX_PROXIES
   };
 });

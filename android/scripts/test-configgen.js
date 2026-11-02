@@ -52,5 +52,16 @@ const dup = cg.buildMihomoConfig({
 const names = dup.config.proxies.map((p) => p.name);
 ok('重名节点自动去重', new Set(names).size === names.length, names.join(','));
 
+// 配置体积上限：节点再多也只写前 MAX_PROXIES 个，避免 YAML 过大 / 跨桥传输过大
+const many = [];
+for (let i = 0; i < 900; i += 1) {
+  many.push({ name: 'M' + i, type: 'ss', server: '5.6.7.' + (i % 250), port: 2000 + i, conf: { cipher: 'aes-128-gcm', password: 'q' + i } });
+}
+const big = cg.buildMihomoConfig({ nodes: many, mixedPort: 7890, ctlPort: 9090 });
+ok('超量节点按上限截断', big.config.proxies.length === cg.MAX_PROXIES, big.config.proxies.length + '/' + cg.MAX_PROXIES);
+ok('截断标记为 true', big.truncated === true);
+ok('返回总数与使用数', big.total === 900 && big.used === cg.MAX_PROXIES, big.total + '/' + big.used);
+ok('YAML 体积可控（< 1MB）', Buffer.byteLength(big.yaml, 'utf8') < 1024 * 1024, (Buffer.byteLength(big.yaml, 'utf8') / 1024).toFixed(0) + 'KB');
+
 console.log('\n结果：' + pass + ' 通过，' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

@@ -489,8 +489,9 @@
   }
 
   function coreSignature() {
-    // 节点集合变化才需要重启内核
-    return state.nodes.slice(0, 200).map(function (n) {
+    // 节点集合变化才需要重启内核（与配置里的节点上限保持一致）
+    var cap = (window.V2PConfigGen && V2PConfigGen.MAX_PROXIES) || 400;
+    return state.nodes.slice(0, cap).map(function (n) {
       return n.type + ':' + n.server + ':' + n.port;
     }).join(',') + '|' + state.settings.routeMode + '|' + state.settings.mixedPort;
   }
@@ -524,11 +525,16 @@
       mixedPort: state.settings.mixedPort,
       ctlPort: state.settings.ctlPort,
       routeMode: state.settings.routeMode,
-      nodeCount: state.nodes.length
+      nodeCount: built.used || state.nodes.length
     });
     if (!r || !r.ok) {
       toast('内核启动失败：' + ((r && r.error) || '未知'), 'err', 6000);
       return false;
+    }
+    // 节点超过配置上限时说明一次，避免用户以为「后面的节点也能用」
+    if (built.truncated && !state.truncTipShown) {
+      state.truncTipShown = true;
+      toast('节点共 ' + built.total + ' 个，内核配置只取前 ' + built.used + ' 个（可「设为默认出口」把常用节点前移）', 'warn', 6000);
     }
     state.coreSig = sig;
     return true;
@@ -612,13 +618,17 @@
 
     state.testing = true;
     state.aborted = false;
-    $('#btnTest').disabled = true;
+    // 检测期间按钮变成「停止」：节点多、节点又不通时单轮可能要好几分钟，
+    // 之前按钮直接 disabled，用户只能干等，体感就是「卡死」
+    $('#btnTest').classList.add('testing');
+    $('#btnTestText').textContent = '停止';
     setProgress(0, targets.length, '正在启动内核…');
 
     var ok = await ensureCore();
     if (!ok) {
       state.testing = false;
-      $('#btnTest').disabled = false;
+      $('#btnTest').classList.remove('testing');
+      $('#btnTestText').textContent = '全面体检';
       $('#progress').hidden = true;
       return;
     }
@@ -661,7 +671,8 @@
     await Promise.all(workers);
 
     state.testing = false;
-    $('#btnTest').disabled = false;
+    $('#btnTest').classList.remove('testing');
+    $('#btnTestText').textContent = '全面体检';
     $('#progress').hidden = true;
     save();
     renderAll();
@@ -847,7 +858,15 @@
 
   $('#btnImport').addEventListener('click', function () { openSheet('sheetImport'); });
   $('#btnMore').addEventListener('click', function () { openSheet('sheetMore'); });
-  $('#btnTest').addEventListener('click', function () { runTest('full'); });
+  $('#btnTest').addEventListener('click', function () {
+    // 检测中再点一次 = 停止
+    if (state.testing) {
+      state.aborted = true;
+      setProgress(0, 0, '正在停止…');
+      return;
+    }
+    runTest('full');
+  });
   $('#btnStopTest').addEventListener('click', function () { state.aborted = true; });
   $('#proxyPill').addEventListener('click', function () {
     if (state.running) stopProxy(); else openSheet('sheetMore');

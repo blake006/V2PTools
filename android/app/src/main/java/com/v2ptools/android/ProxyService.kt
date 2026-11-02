@@ -47,12 +47,38 @@ class ProxyService : VpnService() {
 
     /* ---------------- 普通代理模式 ---------------- */
 
+    /**
+     * 取配置内容。
+     *
+     * 配置**不能**走 Intent extra：Binder 单次事务上限约 1MB，节点多时 YAML 轻松超过，
+     * 会抛 TransactionTooLargeException 直接把 App 干掉（「点全面体检就闪退」就是这么来的）。
+     * 现在约定传文件路径，路径字符串几十字节，服务重建时再从 Store 里取回路径。
+     */
+    private fun configFrom(intent: Intent?): String? {
+        val path = intent?.getStringExtra(EXTRA_CONFIG_PATH)
+            ?: Store(this).get(KEY_PENDING_CONFIG_PATH)
+        if (!path.isNullOrEmpty()) {
+            val text = try {
+                java.io.File(path).readText(Charsets.UTF_8)
+            } catch (e: Exception) {
+                null
+            }
+            if (!text.isNullOrEmpty()) return text
+        }
+        // 兼容旧版本：直接塞在 extra / 存储里的配置
+        val inline = intent?.getStringExtra(EXTRA_CONFIG)
+        if (!inline.isNullOrEmpty()) return inline
+        return Store(this).get(KEY_PENDING_CONFIG)
+    }
+
     private fun startCore(intent: Intent?) {
-        val cfg = intent?.getStringExtra(EXTRA_CONFIG) ?: Store(this).get(KEY_PENDING_CONFIG)
+        val cfg = configFrom(intent)
         if (cfg.isNullOrEmpty()) {
             stopSelf()
             return
         }
+        // 只持久化路径（很小），服务被系统重建时还能找回配置
+        intent?.getStringExtra(EXTRA_CONFIG_PATH)?.let { Store(this).set(KEY_PENDING_CONFIG_PATH, it) }
         val mixed = intent?.getIntExtra(EXTRA_MIXED_PORT, 7890) ?: 7890
         val ctl = intent?.getIntExtra(EXTRA_CTL_PORT, 9090) ?: 9090
         val mode = intent?.getStringExtra(EXTRA_ROUTE_MODE) ?: "global"
@@ -73,7 +99,7 @@ class ProxyService : VpnService() {
     /* ---------------- VPN 模式 ---------------- */
 
     private fun startVpn(intent: Intent?) {
-        val cfg = intent?.getStringExtra(EXTRA_CONFIG) ?: return
+        val cfg = configFrom(intent) ?: return
         val mixed = intent?.getIntExtra(EXTRA_MIXED_PORT, 7890) ?: 7890
         val ctl = intent?.getIntExtra(EXTRA_CTL_PORT, 9090) ?: 9090
         val mode = intent?.getStringExtra(EXTRA_ROUTE_MODE) ?: "global"
@@ -220,13 +246,20 @@ class ProxyService : VpnService() {
         const val ACTION_STOP = "com.v2ptools.android.STOP"
 
         const val EXTRA_CONFIG = "config"
+        const val EXTRA_CONFIG_PATH = "configPath"
         const val EXTRA_MIXED_PORT = "mixedPort"
         const val EXTRA_CTL_PORT = "ctlPort"
         const val EXTRA_ROUTE_MODE = "routeMode"
         const val EXTRA_NODE_COUNT = "nodeCount"
 
         const val KEY_PENDING_CONFIG = "pendingConfig"
+        const val KEY_PENDING_CONFIG_PATH = "pendingConfigPath"
         const val NOTIF_ID = 1001
+
+        /** 配置落盘位置：避免大字符串走 Binder */
+        fun pendingConfigFile(ctx: android.content.Context, name: String = "pending-config.yaml"): java.io.File {
+            return java.io.File(ctx.filesDir, name)
+        }
 
         @Volatile
         var instance: ProxyService? = null
