@@ -362,9 +362,16 @@
     // 未确认可用时先禁用，避免用户点了才报错
     var vpnOk = p.vpnAvailable === true;
     $('#btnStartVpn').disabled = !vpnOk;
-    $('#vpnHint').textContent = vpnOk
-      ? 'VPN 会接管全机流量（需要系统授权）。'
-      : '未集成 libcore.aar：请用「开启代理」，再到 Wi-Fi 设置里填 HTTP 代理。';
+    var port = p.mixedPort || state.settings.mixedPort;
+    if (vpnOk) {
+      $('#vpnHint').textContent = 'VPN 会接管全机流量（需要系统授权）。';
+    } else if (running) {
+      // 已经开着代理就别再说「请先开启代理」，直接告诉下一步怎么做
+      $('#vpnHint').textContent =
+        '代理已开启（127.0.0.1:' + port + '）。未集成 libcore.aar，无法用 VPN 接管全机；要让所有 App 生效，到 Wi-Fi 设置里填这个代理。';
+    } else {
+      $('#vpnHint').textContent = '未集成 libcore.aar：先「开启代理」，再到 Wi-Fi 设置里填 HTTP 代理。';
+    }
   }
 
   function renderRoute() {
@@ -857,7 +864,10 @@
   }
 
   $('#btnImport').addEventListener('click', function () { openSheet('sheetImport'); });
-  $('#btnMore').addEventListener('click', function () { openSheet('sheetMore'); });
+  $('#btnMore').addEventListener('click', function () {
+    fillSettings(); // 每次打开都按当前设置回填，避免显示上一次的旧值
+    openSheet('sheetMore');
+  });
   $('#btnTest').addEventListener('click', function () {
     // 检测中再点一次 = 停止
     if (state.testing) {
@@ -989,10 +999,18 @@
     closeSheets();
   });
 
+  /** 把当前设置回填到「更多」面板（存毫秒/字节，界面显示秒/MB） */
+  function fillSettings() {
+    $('#setConcurrency').value = state.settings.concurrency;
+    $('#setTimeout').value = Math.round((state.settings.latencyTimeout || 6000) / 100) / 10;
+    $('#setSpeedBytes').value = Math.round((state.settings.speedBytes || 5000000) / 1000000);
+  }
+
   $('#btnSaveSettings').addEventListener('click', function () {
     state.settings.concurrency = clamp(parseInt($('#setConcurrency').value, 10) || 6, 1, 16);
-    state.settings.latencyTimeout = clamp(parseInt($('#setTimeout').value, 10) || 6000, 1000, 30000);
-    state.settings.speedBytes = clamp(parseInt($('#setSpeedBytes').value, 10) || 5000000, 500000, 50000000);
+    // 界面按秒/MB 输入，存回毫秒/字节
+    state.settings.latencyTimeout = clamp(Math.round((parseFloat($('#setTimeout').value) || 6) * 1000), 1000, 30000);
+    state.settings.speedBytes = clamp(Math.round((parseFloat($('#setSpeedBytes').value) || 5) * 1000000), 1000000, 50000000);
     save();
     toast('设置已保存', 'ok');
     closeSheets();
@@ -1020,9 +1038,7 @@
       $('#appInfo').textContent = '版本 ' + info.version + ' · Android SDK ' + info.sdk + ' · ' + info.abi +
         (info.vpnAvailable ? ' · VPN 可用' : ' · VPN 不可用（未集成 libcore）');
     }
-    $('#setConcurrency').value = state.settings.concurrency;
-    $('#setTimeout').value = state.settings.latencyTimeout;
-    $('#setSpeedBytes').value = state.settings.speedBytes;
+    fillSettings();
 
     await refreshStatus();
     setInterval(refreshStatus, 5000);
