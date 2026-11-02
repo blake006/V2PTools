@@ -22,6 +22,14 @@ class ProxyService : VpnService() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var tunFd: Int = -1
 
+    /**
+     * 内核启停专用线程。
+     * MihomoCore.start() 内部会轮询 external-controller 直到就绪（最长 15s），
+     * 以前直接在 onStartCommand 里调用 = 阻塞主线程 → ANR → 系统杀进程，
+     * 用户看到的就是「点全面体检卡住，然后闪退」。
+     */
+    private val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -35,8 +43,10 @@ class ProxyService : VpnService() {
         val action = intent?.action ?: ACTION_START_CORE
         when (action) {
             ACTION_STOP -> {
-                shutdown()
-                stopSelf()
+                worker.execute {
+                    shutdown()
+                    stopSelf()
+                }
                 return START_NOT_STICKY
             }
             ACTION_START_VPN -> startVpn(intent)
@@ -86,14 +96,17 @@ class ProxyService : VpnService() {
 
         startForegroundCompat(getString(R.string.notif_running), "127.0.0.1:$mixed")
 
-        val r = MihomoCore.start(this, cfg, mixed, ctl, mode, count, false)
-        if (r.optBoolean("ok")) {
-            acquireWake()
-        } else {
-            shutdown()
-            stopSelf()
+        // 启动内核（含最长 15s 的就绪轮询）放到 worker，主线程必须立刻返回
+        worker.execute {
+            val r = MihomoCore.start(this, cfg, mixed, ctl, mode, count, false)
+            if (r.optBoolean("ok")) {
+                acquireWake()
+            } else {
+                shutdown()
+                stopSelf()
+            }
+            notifyState()
         }
-        notifyState()
     }
 
     /* ---------------- VPN 模式 ---------------- */
@@ -114,6 +127,11 @@ class ProxyService : VpnService() {
 
         startForegroundCompat(getString(R.string.notif_vpn_running), "VPN 模式")
 
+        // 建立 TUN / 启动 libcore 都可能阻塞，同样放到 worker
+        worker.execute { doStartVpn(cfg, ctl) }
+    }
+
+    private fun doStartVpn(cfg: String, ctl: Int) {
         val builder = Builder()
             .setSession("V2PTools")
             .setMtu(1500)
@@ -180,7 +198,13 @@ class ProxyService : VpnService() {
 
     override fun onDestroy() {
         instance = null
-        shutdown()
+        // shutdown() 里 stop() 最多等 1.2s，别压在主线程上
+        try {
+            worker.execute { shutdown() }
+        } catch (e: Exception) {
+            shutdown()
+        }
+        worker.shutdown()
         super.onDestroy()
     }
 
