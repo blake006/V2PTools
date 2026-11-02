@@ -32,18 +32,38 @@
     } catch (e) {}
   };
 
-  /** 调原生；浏览器里（无 Native）退化为本地兜底，方便桌面调试 UI */
-  function call(method, args) {
+  /**
+   * 调原生；浏览器里（无 Native）退化为本地兜底，方便桌面调试 UI。
+   * 必须带超时：原生线程池被长任务（测速 15s）占满时，回包可能永远不来，
+   * 没有超时的话 Promise 会一直挂着，界面上就是「点了没反应、越用越卡」。
+   */
+  function call(method, args, timeoutMs) {
     return new Promise(function (resolve) {
       if (!window.Native || typeof window.Native.invoke !== 'function') {
         resolve(fallback(method, args));
         return;
       }
       var id = 'c' + (++seq);
-      pending[id] = resolve;
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        delete pending[id];
+        resolve({ ok: false, error: '原生调用超时（' + method + '）' });
+      }, timeoutMs || 25000);
+
+      pending[id] = function (data) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(data);
+      };
+
       try {
         window.Native.invoke(method, JSON.stringify(args || {}), id);
       } catch (e) {
+        settled = true;
+        clearTimeout(timer);
         delete pending[id];
         resolve({ ok: false, error: e.message });
       }
@@ -96,8 +116,12 @@
     sort: 'health',
     selected: {},
     coreSig: '',
-    activeNodeId: ''
+    activeNodeId: '',
+    // 列表分页：节点上千时一次性插几千个 DOM 会直接卡死/闪退
+    renderLimit: 120
   };
+
+  var PAGE_SIZE = 120;
 
   var ROUTE_LABEL = { global: '全局代理', 'bypass-cn': '绕过大陆', 'proxy-list': '仅名单代理' };
   var ROUTE_HINT = {
@@ -224,7 +248,58 @@
     return 'bad';
   }
 
-  function renderList() {
+  /** 单个节点的卡片 HTML（列表与局部更新共用，保证两条路径渲染一致） */
+  function cardHtml(n) {
+    var sel = state.selected[n.id] ? ' on' : '';
+    var inUse = n.id === state.activeNodeId ? ' in-use' : '';
+    var fail = n.status === 'fail' ? ' fail' : '';
+    var h = n.health || 0;
+    var hCls = h >= 75 ? 'h-good' : h >= 45 ? 'h-mid' : 'h-bad';
+
+    var meta = [];
+    if (n.latency) meta.push('<span class="' + latencyClass(n.latency) + '">' + n.latency + ' ms</span>');
+    if (n.jitter) meta.push('<span>抖动 ' + n.jitter + '</span>');
+    if (n.speed) meta.push('<span>' + n.speed + ' Mbps</span>');
+    if (n.country) meta.push('<span>' + esc(n.country) + (n.city ? '·' + esc(n.city) : '') + '</span>');
+    if (n.ip) meta.push('<span>' + esc(n.ip) + '</span>');
+    if (n.status === 'testing') meta.push('<span>检测中…</span>');
+    else if (n.status === 'idle') meta.push('<span>未检测</span>');
+    if (n.status === 'fail') meta.push('<span class="bad">' + esc(n.error || '失败') + '</span>');
+    if (n.dnsbl === 'listed') meta.push('<span class="bad">DNSBL</span>');
+
+    return '' +
+      '<div class="card' + inUse + fail + '" data-id="' + n.id + '">' +
+        '<div class="check' + sel + '" data-check="' + n.id + '">✓</div>' +
+        '<div class="card-main">' +
+          '<div class="card-top">' +
+            '<div class="card-name">' + esc(n.name || n.server) + '</div>' +
+            (inUse ? '<span class="tag use">使用中</span>' : '') +
+            '<span class="tag">' + esc(n.type) + '</span>' +
+          '</div>' +
+          '<div class="card-meta">' + meta.join('') + '</div>' +
+        '</div>' +
+        '<div class="health ' + hCls + '"><b>' + (h || '—') + '</b><span>健康</span></div>' +
+      '</div>';
+  }
+
+  /** 只重绘一个卡片；找不到（被分页截掉）时返回 false 由调用方兜底 */
+  function updateCard(n) {
+    var el = document.querySelector('.card[data-id="' + n.id + '"]');
+    if (!el) return false;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = cardHtml(n);
+    var fresh = tmp.firstElementChild;
+    if (!fresh || !el.parentNode) return false;
+    el.parentNode.replaceChild(fresh, el);
+    return true;
+  }
+
+  /**
+   * 分页渲染：默认只插前 120 个，底部给「显示更多」。
+   * 之前是一次性 innerHTML 全部节点，节点上千时字符串拼接 + 布局就够卡死一次，
+   * 检测过程中还会每 3 个节点整体重建，内存直接被抬上去。
+   */
+  function renderList(keepLimit) {
     var list = sortedNodes();
     var box = $('#list');
     var empty = $('#empty');
@@ -241,39 +316,24 @@
     }
     empty.hidden = true;
 
-    var html = list.map(function (n) {
-      var sel = state.selected[n.id] ? ' on' : '';
-      var inUse = n.id === state.activeNodeId ? ' in-use' : '';
-      var fail = n.status === 'fail' ? ' fail' : '';
-      var h = n.health || 0;
-      var hCls = h >= 75 ? 'h-good' : h >= 45 ? 'h-mid' : 'h-bad';
+    if (!keepLimit) state.renderLimit = PAGE_SIZE;
+    var limit = Math.min(list.length, Math.max(PAGE_SIZE, state.renderLimit || PAGE_SIZE));
+    state.listTotal = list.length;
 
-      var meta = [];
-      if (n.latency) meta.push('<span class="' + latencyClass(n.latency) + '">' + n.latency + ' ms</span>');
-      if (n.jitter) meta.push('<span>抖动 ' + n.jitter + '</span>');
-      if (n.speed) meta.push('<span>' + n.speed + ' Mbps</span>');
-      if (n.country) meta.push('<span>' + esc(n.country) + (n.city ? '·' + esc(n.city) : '') + '</span>');
-      if (n.ip) meta.push('<span>' + esc(n.ip) + '</span>');
-      if (n.status === 'idle') meta.push('<span>未检测</span>');
-      if (n.status === 'fail') meta.push('<span class="bad">' + esc(n.error || '失败') + '</span>');
-      if (n.dnsbl === 'listed') meta.push('<span class="bad">DNSBL</span>');
+    var parts = [];
+    for (var i = 0; i < limit; i += 1) parts.push(cardHtml(list[i]));
+    if (list.length > limit) {
+      parts.push('<button class="btn btn-ghost" id="btnMoreNodes" style="margin:12px auto;display:block">显示更多（还有 ' + (list.length - limit) + ' 个）</button>');
+    }
+    box.innerHTML = parts.join('');
 
-      return '' +
-        '<div class="card' + inUse + fail + '" data-id="' + n.id + '">' +
-          '<div class="check' + sel + '" data-check="' + n.id + '">✓</div>' +
-          '<div class="card-main">' +
-            '<div class="card-top">' +
-              '<div class="card-name">' + esc(n.name || n.server) + '</div>' +
-              (inUse ? '<span class="tag use">使用中</span>' : '') +
-              '<span class="tag">' + esc(n.type) + '</span>' +
-            '</div>' +
-            '<div class="card-meta">' + meta.join('') + '</div>' +
-          '</div>' +
-          '<div class="health ' + hCls + '"><b>' + (h || '—') + '</b><span>健康</span></div>' +
-        '</div>';
-    }).join('');
-
-    box.innerHTML = html;
+    var more = $('#btnMoreNodes');
+    if (more) {
+      more.addEventListener('click', function () {
+        state.renderLimit = (state.renderLimit || PAGE_SIZE) + 200;
+        renderList(true);
+      });
+    }
   }
 
   function renderProxyPill() {
@@ -315,9 +375,9 @@
     $('#routeHint').textContent = ROUTE_HINT[mode] || '';
   }
 
-  function renderAll() {
+  function renderAll(keepLimit) {
     renderStats();
-    renderList();
+    renderList(keepLimit);
     renderProxyPill();
     renderRoute();
   }
@@ -541,12 +601,13 @@
     if (state.testing) return;
     if (!state.nodes.length) return toast('请先导入节点', 'err');
 
-    var targets = state.nodes.slice(0, 200);
+    var cap = (window.V2PConfigGen && V2PConfigGen.MAX_LISTENERS) || 200;
+    var targets = state.nodes.slice(0, cap);
     if (mode === 'failed') {
-      targets = state.nodes.filter(function (n) { return n.status === 'fail'; }).slice(0, 200);
+      targets = state.nodes.filter(function (n) { return n.status === 'fail'; }).slice(0, cap);
       if (!targets.length) return toast('没有失败的节点', 'err');
     } else if (mode === 'latency') {
-      targets = state.nodes.slice(0, 200);
+      targets = state.nodes.slice(0, cap);
     }
 
     state.testing = true;
@@ -577,6 +638,7 @@
         if (i >= targets.length) return;
         var n = targets[i];
         n.status = 'testing';
+        updateCard(n);
         try {
           await testOne(n, indexMap[n.id], deep);
         } catch (e) {
@@ -585,10 +647,11 @@
           n.health = 0;
         }
         done++;
+        // 只替换这一张卡片：整体重建在节点多时会把主线程按住不放
+        updateCard(n);
         if (done % 3 === 0 || done === targets.length) {
           setProgress(done, targets.length, done + ' / ' + targets.length);
           renderStats();
-          renderList();
         }
       }
     }
@@ -656,11 +719,20 @@
     setTimeout(refreshStatus, 600);
   }
 
+  var statusBusy = false;
+
   async function refreshStatus() {
-    var st = await call('core.status', {});
-    if (st) {
-      state.proxy = st;
-      renderProxyPill();
+    // 上一次还没回包就跳过这一轮，避免原生线程池被长任务占满时任务越堆越多
+    if (statusBusy) return;
+    statusBusy = true;
+    try {
+      var st = await call('core.status', {}, 8000);
+      if (st && st.ok !== false) {
+        state.proxy = st;
+        renderProxyPill();
+      }
+    } finally {
+      statusBusy = false;
     }
   }
 
@@ -813,6 +885,7 @@
   // 筛选
   $('#search').addEventListener('input', function (e) {
     state.query = e.target.value;
+    state.renderLimit = PAGE_SIZE; // 条件变了，从第一页重新看
     renderList();
   });
 
@@ -832,6 +905,7 @@
         $$('#chips .chip[data-f="sort"]').forEach(function (x) { x.classList.remove('active'); });
         c.classList.add('active');
       }
+      state.renderLimit = PAGE_SIZE;
       renderList();
     });
   });
@@ -866,12 +940,17 @@
     var n = state.nodes.filter(function (x) { return x.id === state.activeNodeId; })[0];
     if (!n) return;
     var idx = state.nodes.indexOf(n);
+    // 测速端口只给前 MAX_LISTENERS 个节点开，超出的节点没有 listener，测了也是白测
+    var cap = (window.V2PConfigGen && V2PConfigGen.MAX_LISTENERS) || 200;
+    if (idx >= cap) {
+      return toast('该节点排在第 ' + (cap + 1) + ' 位之后，测速端口只开前 ' + cap + ' 个；请先精简列表，或把它「设为默认出口」后重开代理', 'err', 6000);
+    }
     toast('正在检测…');
     var ok = await ensureCore();
     if (!ok) return;
     await testOne(n, idx, true);
     save();
-    renderAll();
+    renderAll(true);
     showNode(n.id);
     toast(n.status === 'ok' ? '可用 · ' + n.latency + 'ms' : '失败：' + (n.error || ''), n.status === 'ok' ? 'ok' : 'err');
   });
@@ -928,6 +1007,18 @@
 
     await refreshStatus();
     setInterval(refreshStatus, 5000);
+
+    // 滚到底部自动再加载一页（节流，避免滚动过程中反复重建）
+    var loadMoreTimer = null;
+    window.addEventListener('scroll', function () {
+      if (loadMoreTimer) return;
+      loadMoreTimer = setTimeout(function () { loadMoreTimer = null; }, 250);
+      var total = state.listTotal || 0;
+      if (total <= (state.renderLimit || PAGE_SIZE)) return;
+      if (window.innerHeight + window.scrollY < document.body.scrollHeight - 500) return;
+      state.renderLimit = (state.renderLimit || PAGE_SIZE) + 120;
+      renderList(true);
+    }, { passive: true });
   }
 
   boot();

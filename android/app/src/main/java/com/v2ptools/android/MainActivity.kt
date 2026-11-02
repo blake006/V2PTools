@@ -17,13 +17,29 @@ import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var web: WebView
     private lateinit var store: Store
-    private val pool = Executors.newFixedThreadPool(6)
+
+    /**
+     * 任务线程池：必须有界。
+     * 之前是无界队列，测速任务（单节点 15s）把 6 个线程占满时，每 5 秒一次的状态轮询
+     * 会一直往队列里堆，越堆越慢，最后点一下就崩。现在队列满了丢最老的任务。
+     */
+    private val pool = ThreadPoolExecutor(
+        6, 6, 0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue<Runnable>(128),
+        ThreadPoolExecutor.DiscardOldestPolicy()
+    )
+
+    /** 状态查询单独一条线程：永远排不到测速任务后面 */
+    private val statusPool = Executors.newSingleThreadExecutor()
 
     private var pendingImportCb: String? = null
     private var pendingVpn: JSONObject? = null
@@ -109,6 +125,30 @@ class MainActivity : AppCompatActivity() {
             override fun shouldInterceptRequest(view: WebView, request: android.webkit.WebResourceRequest): android.webkit.WebResourceResponse? {
                 return assetLoader.shouldInterceptRequest(request.url)
             }
+
+            /**
+             * 渲染进程崩溃（最常见的原因是内存耗尽）。
+             * 默认行为是连带整个 App 一起退出，用户看到的就是「点一下就闪退」。
+             * 这里接管掉：重建界面，节点数据在 store 里不会丢。
+             */
+            override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                try {
+                    view?.destroy()
+                } catch (e: Exception) {
+                }
+                android.widget.Toast.makeText(
+                    this@MainActivity,
+                    "界面已重启（内存不足），节点数据已保留",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    try {
+                        recreate()
+                    } catch (e: Exception) {
+                    }
+                }, 300)
+                return true
+            }
         }
         // WebView 默认不处理 alert/confirm，不接管的话 JS 里 confirm 永远返回 false
         web.webChromeClient = object : android.webkit.WebChromeClient() {
@@ -178,7 +218,9 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun invoke(method: String, argsJson: String, callbackId: String) {
-            pool.execute {
+            // 状态查询走独立线程，避免被测速等长任务堵住
+            val exec = if (method == "core.status" || method == "app.info") statusPool else pool
+            exec.execute {
                 val out = try {
                     dispatch(method, JSONObject(argsJson.ifEmpty { "{}" }), callbackId)
                 } catch (e: Exception) {
@@ -350,6 +392,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         if (current === this) current = null
         pool.shutdownNow()
+        statusPool.shutdownNow()
         super.onDestroy()
     }
 

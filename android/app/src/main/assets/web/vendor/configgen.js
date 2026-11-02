@@ -132,17 +132,22 @@
     var names = [];
     var listeners = [];
 
-    nodes.slice(0, MAX_LISTENERS).forEach(function (node, i) {
+    // 所有节点都进代理池：否则「设为使用中」时第 201 个之后的节点在配置里根本不存在
+    nodes.forEach(function (node) {
       var name = uniqueName(node.name || node.server, used);
       names.push(name);
       proxies.push(toProxy(node, name));
+    });
+
+    // 测速端口只给前 MAX_LISTENERS 个节点开，避免几千个 inbound 监听把内核内存吃光
+    nodes.slice(0, MAX_LISTENERS).forEach(function (node, i) {
       listeners.push({
         name: 'probe-' + i,
         type: 'mixed',
         port: listenerBase + i,
         listen: '127.0.0.1',
         // proxy 字段让该监听器绕过规则，直接走指定节点 —— 测速专用
-        proxy: name
+        proxy: names[i]
       });
     });
 
