@@ -76,8 +76,8 @@ scripts/test-node-proxy.js  借道可用节点拉订阅（假 SOCKS5 + 真内核
 
 - 导入（批量链接 / 订阅 / 单条 / 文件）、延迟抖动测速、出口 IP 归属地、DNSBL、健康度
 - 分组筛选、三种分流方式、导出 CSV / JSON / TXT / Clash
-- 订阅拉取走原生 `HttpURLConnection`：内核在跑就复用它的 mixed 端口做代理，
-  被 DNS 污染的订阅站也能拉；失败时回退直连并带回每一步的失败原因
+- 订阅源列表 + 「更新全部订阅」；拉取顺序：本机内核 → 借道已测通节点 → 直连，
+  失败按 401/403/404（链接失效）、5xx（服务端异常）、超时/解析/TLS 分别提示
 - 代理方式：mixed 端口 + 手动 Wi-Fi 代理；可选 VPN（需自行编译 libcore.aar）
 
 详见 [android/README.md](android/README.md)。
