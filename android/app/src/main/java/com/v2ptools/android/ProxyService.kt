@@ -118,8 +118,8 @@ class ProxyService : VpnService() {
         val mode = intent?.getStringExtra(EXTRA_ROUTE_MODE) ?: "global"
         val count = intent?.getIntExtra(EXTRA_NODE_COUNT, 0) ?: 0
 
-        if (!LibcoreBridge.available()) {
-            lastVpnError = "未集成 libcore.aar，无法启用 VPN。请改用 Wi-Fi 代理模式，或按 README 集成 libcore。"
+        if (!(MihomoAar.available() || LibcoreBridge.available())) {
+            lastVpnError = "未集成 mihomo.aar，无法启用 VPN。请改用 Wi-Fi 代理模式，或按 README 编译 AAR。"
             notifyState()
             stopSelf()
             return
@@ -159,16 +159,37 @@ class ProxyService : VpnService() {
         }
 
         tunFd = pfd.fd
-        val ok = LibcoreBridge.startTun(tunFd, MihomoCore.dataDir(this).absolutePath, cfg, ctl)
-        if (!ok) {
-            lastVpnError = LibcoreBridge.lastError.ifEmpty { "libcore 启动失败" }
+        val home = MihomoCore.dataDir(this).absolutePath
+
+        // 优先用 gomobile 编出来的 mihomo.aar（同进程 + socket 保护，不会回环）；
+        // 没有 AAR 时退回旧的 libcore.aar 方案
+        var err: String? = null
+        if (MihomoAar.available()) {
+            MihomoAar.setHomeDir(home)
+            err = MihomoAar.start(cfg, tunFd) { fd ->
+                try {
+                    protect(fd)
+                } catch (e: Exception) {
+                    false
+                }
+            }
+        } else if (LibcoreBridge.available()) {
+            val ok = LibcoreBridge.startTun(tunFd, home, cfg, ctl)
+            if (!ok) err = LibcoreBridge.lastError.ifEmpty { "libcore 启动失败" }
+        } else {
+            err = "未集成 mihomo.aar，无法启用 VPN。请用 Wi-Fi 代理模式，或按 README 编译 AAR。"
+        }
+
+        if (err != null) {
+            lastVpnError = err
             try { pfd.close() } catch (e: Exception) {}
+            tunFd = -1
             notifyState()
             stopSelf()
             return
         }
 
-        // VPN 模式下内核由 libcore 托管，这里只记录状态
+        // VPN 模式下内核托管在进程内，这里只记录状态
         vpnRunning = true
         acquireWake()
         notifyState()
@@ -179,7 +200,7 @@ class ProxyService : VpnService() {
     private fun shutdown() {
         releaseWake()
         if (vpnRunning) {
-            LibcoreBridge.stopTun()
+            if (MihomoAar.available()) MihomoAar.stop() else LibcoreBridge.stopTun()
             vpnRunning = false
         }
         if (tunFd >= 0) {
@@ -267,7 +288,7 @@ class ProxyService : VpnService() {
     fun statusJson(): JSONObject {
         val o = MihomoCore.status(this)
         o.put("vpnRunning", vpnRunning)
-        o.put("vpnAvailable", LibcoreBridge.available())
+        o.put("vpnAvailable", (MihomoAar.available() || LibcoreBridge.available()))
         o.put("vpnError", lastVpnError)
         return o
     }

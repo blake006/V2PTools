@@ -23,7 +23,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 75
 
     steps:
       - name: 检出代码
@@ -38,7 +38,37 @@ jobs:
       - name: 安装 Android SDK 组件
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools ndk;26.1.10909125'
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
+      - name: 缓存 mihomo AAR（VPN 用）
+        uses: actions/cache@v4
+        with:
+          path: android/app/libs/mihomo.aar
+          key: mihomo-aar-${{ hashFiles('android/native/go.mod') }}-arm64-v1
+
+      - name: 编译 mihomo AAR（VpnService 进程内内核）
+        run: |
+          set -e
+          AAR=android/app/libs/mihomo.aar
+          if [ -f "$AAR" ]; then
+            echo "命中缓存：$(du -h "$AAR" | cut -f1)"
+            exit 0
+          fi
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          mkdir -p android/app/libs
+          cd android/native
+          go mod tidy
+          gomobile bind -target=android/arm64 -androidapi 26 -o ../app/libs/mihomo.aar .
+          ls -lh ../app/libs/mihomo.aar
 
       - name: 安装 Gradle
         uses: gradle/actions/setup-gradle@v4

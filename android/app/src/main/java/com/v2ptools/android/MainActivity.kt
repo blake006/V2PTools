@@ -322,9 +322,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 "dnsbl" -> return Probe.dnsbl(a.optString("ip"), a.optInt("timeout", 6000))
                 "vpn.start" -> {
-                    if (!LibcoreBridge.available()) {
+                    if (!(MihomoAar.available() || LibcoreBridge.available())) {
                         return JSONObject().put("ok", false)
-                            .put("error", "未集成 libcore.aar，无法启用 VPN。请使用 Wi-Fi 代理模式。")
+                            .put("error", "未集成 mihomo.aar，无法启用 VPN。请使用 Wi-Fi 代理模式。")
                     }
                     pendingVpn = a
                     lastVpnCb = cb
@@ -389,7 +389,7 @@ class MainActivity : AppCompatActivity() {
                         .put("version", BuildConfig.VERSION_NAME)
                         .put("sdk", Build.VERSION.SDK_INT)
                         .put("abi", Build.SUPPORTED_ABIS.firstOrNull() ?: "")
-                        .put("vpnAvailable", LibcoreBridge.available())
+                        .put("vpnAvailable", (MihomoAar.available() || LibcoreBridge.available()))
                 }
                 else -> return JSONObject().put("ok", false).put("error", "未知方法 $method")
             }

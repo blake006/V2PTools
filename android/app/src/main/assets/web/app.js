@@ -369,9 +369,9 @@
     } else if (running) {
       // 已经开着代理就别再说「请先开启代理」，直接告诉下一步怎么做
       $('#vpnHint').textContent =
-        '代理已开启（127.0.0.1:' + port + '）。未集成 libcore.aar，无法用 VPN 接管全机；要让所有 App 生效，到 Wi-Fi 设置里填这个代理。';
+        '代理已开启（127.0.0.1:' + port + '）。未集成 mihomo.aar，无法用 VPN 接管全机；要让所有 App 生效，到 Wi-Fi 设置里填这个代理。';
     } else {
-      $('#vpnHint').textContent = '未集成 libcore.aar：先「开启代理」，再到 Wi-Fi 设置里填 HTTP 代理。';
+      $('#vpnHint').textContent = '未集成 mihomo.aar：先「开启代理」，再到 Wi-Fi 设置里填 HTTP 代理。';
     }
   }
 
@@ -874,7 +874,9 @@
         routeMode: state.settings.routeMode,
         mixedPort: state.settings.mixedPort,
         ctlPort: state.settings.ctlPort,
-        listenerBase: state.settings.listenerBase
+        listenerBase: state.settings.listenerBase,
+        // VPN 模式要生成 tun 段（含 dns-hijack），fd 由原生侧运行时注入
+        enableTun: !!useVpn
       });
     } catch (e) {
       return toast('配置生成失败：' + e.message, 'err');
