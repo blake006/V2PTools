@@ -437,40 +437,98 @@
     closeSheets();
   }
 
-  async function importSubscription(url) {
-    if (!/^https?:\/\//i.test(url)) return toast('请输入 http(s) 开头的订阅地址', 'err');
-    toast('正在拉取订阅…');
+  /** 把原生返回的失败原因翻译成人话（4xx/5xx 不是网络问题，别让用户反复重试） */
+  function subErrorText(r, fallback) {
+    if (!r) return fallback || '拉取失败';
+    if (r.kind === 'http') {
+      if (r.code === 401 || r.code === 403 || r.code === 404) return '订阅链接无效或已过期（HTTP ' + r.code + '）';
+      if (r.code >= 500) return '订阅服务端异常（HTTP ' + r.code + '）';
+    }
+    if (r.kind === 'timeout') return '拉取超时：订阅站可能被墙，开启代理后再试';
+    if (r.kind === 'dns') return '域名解析失败：检查订阅链接或 DNS';
+    if (r.kind === 'tls') return 'TLS 握手失败：可能是证书问题或代理干扰';
+    return r.error || fallback || '拉取失败';
+  }
 
+  /**
+   * 拉订阅文本：原生（内核在跑走 mixed 端口）→ 借道已测通节点 → WebView 直连。
+   * 返回 { text, why, viaNode }
+   */
+  async function fetchSubText(url) {
     var text = '';
     var why = '';
+    var last = null;
+    var viaNode = '';
 
-    // 1) 原生拉取：内核在跑就走它的 mixed 端口。WebView 的 fetch 只能直连，
-    //    而这类订阅站域名普遍被 DNS 污染，直连一定超时。
+    // 1) 原生拉取：WebView 的 fetch 只能直连，被 DNS 污染的订阅站必超时
     try {
       var port = state.proxy && state.proxy.running
         ? (state.proxy.mixedPort || state.settings.mixedPort)
         : 0;
       var r = await call('sub.fetch', { url: url, port: port, timeout: 25000 });
       if (r && r.ok && r.text) text = r.text;
-      else why = (r && r.error) || '原生拉取失败';
+      else {
+        last = r;
+        why = subErrorText(r, '原生拉取失败');
+      }
     } catch (e) {
       why = e.message || '原生拉取失败';
     }
 
-    // 2) 回退 WebView fetch（桌面预览、或原生通道不可用时）
+    // 2) 借道已测通的节点：订阅站被墙、又没开代理时唯一的自救路径
+    //    （用内核给每个节点开的 listener 端口当出口，和桌面版一致）
+    if (!text) {
+      var cap = (window.V2PConfigGen && V2PConfigGen.MAX_LISTENERS) || 200;
+      var usable = state.nodes
+        .map(function (n, i) { return { n: n, i: i }; })
+        .filter(function (x) { return x.n.status === 'ok' && x.i < cap; })
+        .sort(function (a, b) { return (a.n.latency || 1e9) - (b.n.latency || 1e9); })
+        .slice(0, 3);
+
+      if (usable.length) {
+        if (await ensureCore()) {
+          for (var k = 0; k < usable.length; k += 1) {
+            var pr = nodePort(usable[k].i);
+            // eslint-disable-next-line no-await-in-loop
+            var r2 = await call('sub.fetch', { url: url, port: pr, timeout: 25000 });
+            if (r2 && r2.ok && r2.text) {
+              text = r2.text;
+              viaNode = usable[k].n.name || usable[k].n.server;
+              break;
+            }
+            last = r2 || last;
+          }
+          if (!text) why = subErrorText(last, why);
+        }
+      }
+    }
+
+    // 3) 回退 WebView fetch（桌面预览、或原生通道不可用时）
     if (!text) {
       try {
         var res = await fetch(url, { headers: { Accept: '*/*' } });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         text = await res.text();
       } catch (e) {
-        toast('订阅拉取失败：' + (why || e.message), 'err', 6000);
-        return;
+        return { text: '', why: why || e.message, viaNode: '' };
       }
     }
 
+    return { text: text, why: '', viaNode: viaNode };
+  }
+
+  async function importSubscription(url) {
+    if (!/^https?:\/\//i.test(url)) return toast('请输入 http(s) 开头的订阅地址', 'err');
+    toast('正在拉取订阅…');
+
+    var got = await fetchSubText(url);
+    if (!got.text) {
+      toast('订阅拉取失败：' + (got.why || '未知原因'), 'err', 6000);
+      return;
+    }
+
     try {
-      var added = parseAndAdd(text, url);
+      var added = parseAndAdd(got.text, url);
       if (added > 0) {
         var host = '';
         try { host = new URL(url).hostname; } catch (e) {}
@@ -478,15 +536,85 @@
         if (exist) {
           exist.count = added;
           exist.lastSync = Date.now();
+          exist.error = '';
         } else {
-          state.sources.push({ id: uid(), url: url, group: host, count: added, lastSync: Date.now() });
+          state.sources.push({ id: uid(), url: url, group: host, count: added, lastSync: Date.now(), error: '' });
         }
         save();
+        renderSources();
       }
       closeSheets();
+      if (got.viaNode) toast('已通过节点「' + got.viaNode + '」拉取订阅', 'ok', 4000);
     } catch (e) {
       toast('订阅解析失败：' + e.message, 'err', 5000);
     }
+  }
+
+  /** 订阅源列表 + 一键更新（安卓之前没有刷新订阅的入口，订阅过期只能删了重导） */
+  function renderSources() {
+    var box = $('#sourceList');
+    if (!box) return;
+    if (!state.sources.length) {
+      box.innerHTML = '<div class="hint">还没有订阅源；导入订阅后会自动记录，可在这里一键更新</div>';
+      return;
+    }
+    box.innerHTML = state.sources
+      .map(function (s) {
+        var when = s.lastSync ? new Date(s.lastSync).toLocaleString('zh-CN', { hour12: false }) : '未更新';
+        var err = s.error ? '<div class="src-err">' + esc(s.error) + '</div>' : '';
+        return (
+          '<div class="src-row">' +
+          '<div class="src-main"><b>' + esc(s.group || '订阅') + '</b>' +
+          '<span>' + (s.count || 0) + ' 个 · ' + when + '</span>' + err + '</div>' +
+          '</div>'
+        );
+      })
+      .join('');
+  }
+
+  async function syncAllSources() {
+    if (state.testing) return toast('体检进行中，稍后再更新订阅', 'err');
+    if (!state.sources.length) return toast('还没有订阅源', 'err');
+
+    var added = 0;
+    var failed = 0;
+    var viaCount = 0;
+    for (var i = 0; i < state.sources.length; i += 1) {
+      var src = state.sources[i];
+      toast('更新订阅 ' + (i + 1) + '/' + state.sources.length + '…', '', 1500);
+      // eslint-disable-next-line no-await-in-loop
+      var got = await fetchSubText(src.url);
+      if (!got.text) {
+        src.error = got.why || '拉取失败';
+        failed += 1;
+        continue;
+      }
+      if (got.viaNode) viaCount += 1;
+      var parsed = null;
+      try {
+        parsed = V2P.parser.parseText(got.text, { plainType: 'socks5', source: src.url });
+      } catch (e) {
+        src.error = e.message;
+        failed += 1;
+        continue;
+      }
+      if (!parsed || !parsed.nodes.length) {
+        src.error = '未解析到节点';
+        failed += 1;
+        continue;
+      }
+      added += addNodes(parsed.nodes, src.url);
+      src.count = parsed.nodes.length;
+      src.lastSync = Date.now();
+      src.error = '';
+    }
+
+    save();
+    renderAll();
+    renderSources();
+    var msg = '订阅更新完成：新增 ' + added + ' 个' + (failed ? '，' + failed + ' 个失败' : '');
+    if (viaCount) msg += '（' + viaCount + ' 个经节点拉取）';
+    toast(msg, failed ? 'warn' : 'ok', 5000);
   }
 
   /* ================= 体检 ================= */
@@ -501,6 +629,21 @@
     return state.nodes.slice(0, cap).map(function (n) {
       return n.type + ':' + n.server + ':' + n.port;
     }).join(',') + '|' + state.settings.routeMode + '|' + state.settings.mixedPort;
+  }
+
+  /** 等内核真正就绪：1.0.4 起启动改在服务线程里做，core.start 返回时进程还没起来 */
+  async function waitCoreReady(timeoutMs) {
+    var deadline = Date.now() + (timeoutMs || 20000);
+    while (Date.now() < deadline) {
+      var st = await call('core.status', {}, 5000);
+      if (st && st.running) {
+        state.proxy = st;
+        renderProxyPill();
+        return true;
+      }
+      await new Promise(function (r) { setTimeout(r, 300); });
+    }
+    return false;
   }
 
   async function ensureCore() {
@@ -536,6 +679,12 @@
     });
     if (!r || !r.ok) {
       toast('内核启动失败：' + ((r && r.error) || '未知'), 'err', 6000);
+      return false;
+    }
+    // 必须等内核监听端口就绪，否则紧接着的测速会全部连不上、被判成失败
+    var ready = await waitCoreReady(20000);
+    if (!ready) {
+      toast('内核启动超时：请检查是否被系统限制后台运行', 'err', 6000);
       return false;
     }
     // 节点超过配置上限时说明一次，避免用户以为「后面的节点也能用」
@@ -866,8 +1015,10 @@
   $('#btnImport').addEventListener('click', function () { openSheet('sheetImport'); });
   $('#btnMore').addEventListener('click', function () {
     fillSettings(); // 每次打开都按当前设置回填，避免显示上一次的旧值
+    renderSources();
     openSheet('sheetMore');
   });
+  $('#btnSyncSources').addEventListener('click', syncAllSources);
   $('#btnTest').addEventListener('click', function () {
     // 检测中再点一次 = 停止
     if (state.testing) {
@@ -1065,6 +1216,7 @@
         (info.vpnAvailable ? ' · VPN 可用' : ' · VPN 不可用（未集成 libcore）');
     }
     fillSettings();
+    renderSources();
 
     await refreshStatus();
     setInterval(refreshStatus, 5000);

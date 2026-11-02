@@ -173,6 +173,20 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(web)
         web.loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
+
+        // Android 13+ 不申请通知权限的话，前台服务通知不会显示（服务仍能跑，但用户看不到状态）
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            try {
+                notifPermLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    private val notifPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        // 拒绝也不影响内核运行，只是没有常驻通知
     }
 
     /* ---------------- 与 JS 通信 ---------------- */
