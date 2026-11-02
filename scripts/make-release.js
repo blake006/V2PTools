@@ -51,7 +51,7 @@ const BODY = `## 1.0.6 — 订阅拉取修复
 
 - \`portable.exe\`：单文件免安装，双击即用（推荐）
 - \`.zip\`：解压版
-- \`.apk\`：安卓版（debug 签名，需允许未知来源安装；要求 Android 8.0+、arm64）
+- \`.apk\`：安卓版 1.0.1（debug 签名，需允许未知来源安装；要求 Android 8.0+、arm64）
 `;
 
 function fmt(b) {
@@ -125,7 +125,7 @@ async function uploadAsset(releaseId, file) {
   const assets = [
     path.join(ROOT, 'dist', 'V2PTools-1.0.6-win-x64-portable.exe'),
     path.join(ROOT, 'dist', 'V2PTools-1.0.6-win-x64.zip'),
-    path.join(ROOT, 'dist', 'V2PTools-android-1.0.0-debug.apk'),
+    path.join(ROOT, 'dist', 'V2PTools-android-1.0.1-debug.apk'),
   ];
 
   for (const f of assets) {
