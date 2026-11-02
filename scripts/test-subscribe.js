@@ -17,7 +17,7 @@
 
 const http = require('http');
 const { app } = require('electron');
-const { fetchSubscription, fetchWithNet, normalizeProxy } = require('../electron/lib/subscribe');
+const { fetchSubscription, fetchWithNet, normalizeProxy, detectLocalProxy } = require('../electron/lib/subscribe');
 
 app.commandLine.appendSwitch('host-resolver-rules', 'MAP sub.test 127.0.0.1');
 
@@ -126,6 +126,23 @@ async function main() {
   ok('端口简写补 127.0.0.1', normalizeProxy('7890') === '127.0.0.1:7890');
   ok('带 scheme 去掉', normalizeProxy('http://127.0.0.1:7890') === '127.0.0.1:7890');
   ok('空值保持空', normalizeProxy('  ') === '');
+
+  // 6) 本机代理端口探测（首次使用自动借用）
+  ok('detectLocalProxy 能发现监听端口', (await detectLocalProxy([target.port])) === target.port);
+  ok('detectLocalProxy 无监听返回 0', (await detectLocalProxy([1])) === 0);
+
+  // 7) 直连失败时，提示检测到的本机代理端口
+  let hintErr = null;
+  try {
+    await fetchSubscription('http://sub.test:1/sub', { timeout: 2000, proxyCandidates: [proxy.port] });
+  } catch (e) {
+    hintErr = e;
+  }
+  ok(
+    '失败时提示检测到的本机端口',
+    !!hintErr && new RegExp(`127\\.0\\.0\\.1:${proxy.port} 有代理在监听`).test(hintErr.message),
+    hintErr && hintErr.message
+  );
 
   target.srv.close();
   hang.srv.closeAllConnections();

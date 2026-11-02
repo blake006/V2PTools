@@ -23,6 +23,35 @@ let gateway = null;
 let sysproxy = null;
 let quitting = false;
 
+/**
+ * 单实例锁：多开会抢 7890 端口和系统代理，第二个实例开代理必然失败。
+ * 第二次启动直接把已有窗口叫到前面（含「窗口在但没显示」的情况）。
+ */
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.exit(0);
+} else {
+  app.on('second-instance', () => {
+    bootLog('second-instance');
+    if (!win || win.isDestroyed()) {
+      createWindow();
+      return;
+    }
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    try {
+      win.setSkipTaskbar(false);
+    } catch (e) {}
+    win.focus();
+    try {
+      win.flashFrame(true);
+      setTimeout(() => {
+        if (win && !win.isDestroyed()) win.flashFrame(false);
+      }, 2500);
+    } catch (e) {}
+  });
+}
+
 /** 启动阶段日志：仅 V2P_DEBUG 时写入 userData/boot.log（打包版没有控制台，靠它排错） */
 function bootLog(msg) {
   if (!process.env.V2P_DEBUG) return;
@@ -66,7 +95,7 @@ function resolveRulesDir() {
 /* 订阅拉取                                                            */
 /* ------------------------------------------------------------------ */
 
-const { fetchSubscription, normalizeProxy } = require('./lib/subscribe');
+const { fetchSubscription, normalizeProxy, detectLocalProxy } = require('./lib/subscribe');
 
 /* ------------------------------------------------------------------ */
 /* 窗口                                                                */
@@ -100,10 +129,28 @@ function createWindow() {
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   win.webContents.on('did-fail-load', (e, code, desc, url) => bootLog(`did-fail-load ${code} ${desc} ${url}`));
   win.webContents.on('render-process-gone', (e, d) => bootLog('render-process-gone ' + JSON.stringify(d)));
+
+  // 兜底：首帧迟迟不来（页面卡住 / GPU 异常）也要把窗口显示出来，
+  // 否则进程活着但没窗口，用户只会看到「双击没反应」，而且它占着单实例锁。
+  const showTimer = setTimeout(() => {
+    if (win && !win.isDestroyed() && !win.isVisible()) {
+      bootLog('ready-to-show 超时，强制显示窗口');
+      try {
+        win.show();
+      } catch (e) {}
+    }
+  }, 8000);
+
   win.once('ready-to-show', () => {
     bootLog('ready-to-show');
+    clearTimeout(showTimer);
     win.show();
     if (isDev) win.webContents.openDevTools({ mode: 'detach' });
+  });
+
+  win.on('closed', () => {
+    clearTimeout(showTimer);
+    win = null;
   });
 
   // 调试用：V2P_DEBUG=1 时打印渲染层日志与关键节点自检结果
@@ -335,6 +382,7 @@ function stopProxyWatch() {
 /* ------------------------------------------------------------------ */
 
 app.whenReady().then(async () => {
+  if (!gotLock) return; // 第二个实例已经在 second-instance 里处理完，不再初始化内核
   bootLog('whenReady 触发');
   const userData = app.getPath('userData');
   store = new Store(userData);
@@ -396,8 +444,9 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('window-all-closed', async () => {
-  if (core) await core.stop();
+app.on('window-all-closed', () => {
+  // 同步 quit，内核在 before-quit 里关；
+  // 这里 await core.stop() 会让进程在窗口关掉后还赖着，占住单实例锁 → 下次双击打不开
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -459,32 +508,121 @@ ipcMain.handle('import:parse', (e, payload) => {
  * 订阅拉取走哪个代理：
  *   1) 设置里显式填的「订阅拉取代理」
  *   2) 本机代理内核正在跑 → 自动借用它的 mixed 端口
- *   3) 都没有 → 直连
- * 被墙的订阅站只有 1)/2) 能通，这也是之前「订阅拉取超时」的根因。
+ *   3) 本机开着别的客户端（Clash Verge 7897 / v2rayN 10809 …）→ 探到哪个借哪个
+ *   4) 都没有 → 直连（失败后还有「借道可用节点」兜底）
+ * 被墙的订阅站只有 1)–3) 能通，这也是「订阅拉取超时」的根因。
  */
-function resolveSubProxy() {
+let localProxyCache = { at: 0, port: 0 };
+
+async function resolveSubProxy() {
   const s = currentSettings();
   const explicit = normalizeProxy(s.subProxy);
   if (explicit) return { proxy: explicit, auto: false };
+
   const gw = gateway ? gateway.status() : null;
   if (gw && gw.running && gw.port) {
     return { proxy: `127.0.0.1:${gw.port}`, auto: true };
   }
+
+  // 扫本机端口有成本（最坏 7×350ms），缓存 60 秒
+  if (Date.now() - localProxyCache.at > 60000) {
+    localProxyCache = { at: Date.now(), port: await detectLocalProxy() };
+  }
+  if (localProxyCache.port) {
+    return { proxy: `127.0.0.1:${localProxyCache.port}`, auto: true };
+  }
   return { proxy: '', auto: false };
 }
 
+/* ------------------------------------------------------------------ */
+/* 借道「已检测可用的节点」拉订阅                                        */
+/* ------------------------------------------------------------------ */
+
+const NODE_PROXY_TTL = 60000;
+let nodeProxy = { at: 0, nodeId: '' };
+
+/** 检测通过、按延迟排序的节点（借道时优先用最快的） */
+function usableNodes() {
+  return store
+    .read('nodes.json', [])
+    .filter((n) => n && n.status === 'ok' && n.type && n.server && n.port)
+    .sort((a, b) => (a.latency == null ? 1e9 : a.latency) - (b.latency == null ? 1e9 : b.latency));
+}
+
+async function ensureNodeProxy(nodes) {
+  const fresh =
+    nodeProxy.nodeId &&
+    Date.now() - nodeProxy.at < NODE_PROXY_TTL &&
+    core &&
+    core.running &&
+    nodes.some((n) => n.id === nodeProxy.nodeId);
+  if (fresh) return;
+  await core.start(nodes);
+  nodeProxy = { at: Date.now(), nodeId: nodes[0].id };
+}
+
+/** 依次尝试前几个可用节点，谁先拉到内容用谁 */
+async function fetchViaNodes(url) {
+  const nodes = usableNodes().slice(0, 3);
+  if (!nodes.length) return null;
+  await ensureNodeProxy(nodes);
+
+  const errors = [];
+  for (const n of nodes) {
+    const port = core.portOf(n.id);
+    if (!port) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const text = await fetchSubscription(url, { proxy: `127.0.0.1:${port}`, timeout: 20000 });
+      if (text && text.trim()) return { text, node: n };
+    } catch (err) {
+      errors.push(`${n.name || n.server}：${err.message}`);
+    }
+  }
+  throw new Error(errors[0] || '通过节点拉取失败');
+}
+
 ipcMain.handle('import:fetch', async (e, url) => {
-  const { proxy, auto } = resolveSubProxy();
-  let text;
+  const { proxy, auto } = await resolveSubProxy();
+  let text = null;
+  let viaNode = null;
+  let directErr = null;
+
   try {
     text = await fetchSubscription(url, { proxy });
   } catch (err) {
-    // 自动借用失败时说清楚用的是什么，避免用户以为「没走代理」
-    const hint = auto ? `；已自动借用本机代理 127.0.0.1:${proxy.split(':').pop()}` : '';
-    throw new Error(`${err.message}${hint}`);
+    directErr = err;
   }
+
+  // 直连/代理都失败 → 借道已检测可用的节点再试一次
+  // （测速进行中不能抢内核，gateway 在跑时也不能动它）
+  if (!text && !runner && !(gateway && gateway.status().running)) {
+    try {
+      const r = await fetchViaNodes(url);
+      if (r) {
+        text = r.text;
+        viaNode = r.node;
+      }
+    } catch (err) {
+      /* 节点也失败时，报直连的原因更有参考价值 */
+    }
+  }
+
+  if (!text) {
+    const hint = auto ? `；已自动借用本机代理 127.0.0.1:${proxy.split(':').pop()}` : '';
+    throw new Error(`${(directErr && directErr.message) || '订阅拉取失败'}${hint}`);
+  }
+
   const res = parser.parseText(text, { group: new URL(url).hostname, source: url });
-  return { nodes: res.nodes, errors: res.errors, format: res.format, bytes: text.length, viaProxy: proxy || '' };
+  return {
+    nodes: res.nodes,
+    errors: res.errors,
+    format: res.format,
+    bytes: text.length,
+    viaProxy: proxy || '',
+    autoProxy: auto,
+    viaNode: viaNode ? { id: viaNode.id, name: viaNode.name || viaNode.server, latency: viaNode.latency } : null,
+  };
 });
 
 ipcMain.handle('import:file', async () => {

@@ -5,6 +5,7 @@
 const http = require('http');
 const https = require('https');
 const dns = require('dns');
+const net = require('net');
 
 const SUB_UA = [
   'clash-verge/v2.4.2',
@@ -104,6 +105,46 @@ function normalizeProxy(input) {
   s = s.replace(/^[a-zA-Z]+:\/\//, '').replace(/\/+$/, '');
   if (/^\d+$/.test(s)) return `127.0.0.1:${s}`;
   return s;
+}
+
+/** 端口是否有人在监听（本机代理探测用） */
+function probeTcp(host, port, timeout = 900) {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host, port });
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      sock.destroy();
+      resolve(ok);
+    };
+    sock.setTimeout(timeout);
+    sock.once('connect', () => finish(true));
+    sock.once('timeout', () => finish(false));
+    sock.once('error', () => finish(false));
+  });
+}
+
+/** 常见本地代理端口：CFW/mihomo 7890、Clash Verge 7897、v2rayN 10808/10809、通用 1080 */
+const COMMON_PROXY_PORTS = [7890, 7897, 7891, 10808, 10809, 1080, 2080];
+
+/** 扫一遍本机常见端口，返回第一个在监听的端口号（没有则 0） */
+async function detectLocalProxy(ports = COMMON_PROXY_PORTS) {
+  for (const port of ports) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await probeTcp('127.0.0.1', port, 350)) return port;
+  }
+  return 0;
+}
+
+/** 4xx/5xx 不是网络问题，直接说清楚，省得用户反复重试 */
+function httpHint(text) {
+  const m = /HTTP (\d{3})/.exec(String(text || ''));
+  if (!m) return '';
+  const code = Number(m[1]);
+  if (code === 401 || code === 403 || code === 404) return '；订阅链接无效或已过期，请重新复制（不是网络问题）';
+  if (code >= 500) return '；订阅服务端异常，稍后重试或联系服务商';
+  return '';
 }
 
 /**
@@ -277,7 +318,32 @@ async function fetchSubscription(url, opts = {}) {
   const timedOut = errors.some((m) => /超时/.test(m));
   const head = timedOut ? '订阅拉取超时' : '订阅拉取失败';
   const tried = proxy ? `已尝试代理 ${proxy} 与直连` : '未配置拉取代理，仅尝试直连';
-  throw new Error(`${head}。${detail}（${tried}）`);
+  const hint = httpHint(errors.join('；')) || (proxy ? '' : await proxyHint(opts.proxyCandidates));
+  throw new Error(`${head}。${detail}${hint}（${tried}）`);
 }
 
-module.exports = { fetchSubscription, fetchUrl, fetchWithNet, diagnose, normalizeProxy, decodeBuffer, SUB_UA, POISON_IPS };
+/**
+ * 直连失败且没配代理时，扫一下本机常见端口：
+ * 有代理在跑就直接告诉用户填哪个端口，没有就提醒先启动客户端——
+ * 比「可能被墙」这种只能干瞪眼的提示有用。
+ */
+async function proxyHint(candidates) {
+  const port = await detectLocalProxy(candidates);
+  if (port) return `；检测到本机 127.0.0.1:${port} 有代理在监听，可在「设置 → 订阅拉取代理」填该端口后重试`;
+  return '；本机未检测到常见代理端口（7890 / 7897 / 10809），如需经代理拉取请先启动代理客户端';
+}
+
+module.exports = {
+  fetchSubscription,
+  fetchUrl,
+  fetchWithNet,
+  diagnose,
+  normalizeProxy,
+  decodeBuffer,
+  probeTcp,
+  detectLocalProxy,
+  proxyHint,
+  COMMON_PROXY_PORTS,
+  SUB_UA,
+  POISON_IPS,
+};

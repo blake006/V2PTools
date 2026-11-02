@@ -34,6 +34,7 @@ scripts/test-proxystate.js  代理状态机测试（18 项）
 scripts/test-ruleformat.js  分流规则格式测试（20 项）
 scripts/test-clash.js       Clash 配置导出测试（12 项，含 mihomo -t 校验）
 scripts/test-subscribe.js   订阅拉取测试（9 项，含本地代理命中与超时路径）
+scripts/test-node-proxy.js  借道可用节点拉订阅（假 SOCKS5 + 真内核，2 项）
 ```
 
 改动文件：`electron/main.js`、`electron/preload.js`、`electron/lib/store.js`、
@@ -43,13 +44,18 @@ scripts/test-subscribe.js   订阅拉取测试（9 项，含本地代理命中�
 
 ## 从 IPHealth 同步的内容
 
-上游 `blake006/IPHealth` 的以下改动已合并（截至 1.0.3）：
+上游 `blake006/IPHealth` 的以下改动已合并（截至 1.0.10）：
 
 | 上游提交 | 内容 | 状态 |
 |---|---|---|
 | `b28ad61a` | 订阅拉取改用 Chromium 网络栈（自动跟随系统代理、HTTP/2） | ✅ 已同步 |
 | `c086dbb1` | 代理地址格式容错 + DNS 污染 IP 识别与可读诊断 | ✅ 已同步 |
 | `743d6279` | 导出 Clash 配置、检测范围（仅测未测 / 重测失败） | ✅ 已同步 |
+| `877566e` | 状态栏版本号 + 订阅失败原因分诊（4xx/5xx 分别给建议） | ✅ 已同步 |
+| `f7c7311` | 直连失败时探测本机常见代理端口（7890 / 7897 / 10809…）并给出可操作建议 | ✅ 已同步 |
+| `0aa801c` | 直连失败时**借道已检测可用的节点**拉订阅（前 3 个，60s 复用） | ✅ 已同步 |
+| `113430a` | 首次使用引导 + 自动借用本机代理端口 | ✅ 已同步 |
+| `1ea46fd` | 双击打不开（残留实例占锁 / 窗口不显示）与版本号可见性 | ✅ 已同步 |
 
 **未同步**的部分及原因：
 
