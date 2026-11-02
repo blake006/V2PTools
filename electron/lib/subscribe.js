@@ -117,6 +117,7 @@ async function fetchWithNet(url, timeout = 20000, proxy = '') {
       const { session } = require('electron');
       subSession = session.fromPartition('v2ptools-subfetch');
       await subSession.setProxy({
+        mode: 'fixed_servers',
         proxyRules: `http=${proxy};https=${proxy}`,
         proxyBypassRules: '<local>',
       });
@@ -213,39 +214,70 @@ async function diagnose(url) {
   return `域名 ${host} 解析到 ${ips[0]}，但连接失败（可能被墙或服务端不可达）。`;
 }
 
-/** 依次尝试多个 User-Agent，兼容 Clash / V2Ray / 通用订阅 */
+/**
+ * 拉取订阅。
+ *
+ * 被墙的订阅站只有「走代理」能通，所以有代理时**代理与直连并发竞速**：
+ * 谁先拿到内容就用谁，避免先干等 30s 代理超时再等直连超时（那种体验就是「卡住」）。
+ *   1) 代理（若配置/自动借用）+ 直连 并发，先成功者胜
+ *   2) 都失败 → Node https 多 UA 兜底（老订阅站 / 证书链异常）
+ *   3) 全失败 → 拼一句能指导操作的话
+ */
 async function fetchSubscription(url, opts = {}) {
   const proxy = normalizeProxy(opts.proxy);
-  let lastErr = null;
+  const timeout = Math.max(8000, Number(opts.timeout) || 25000);
+  const errors = [];
 
-  // 1) 优先走 Chromium 网络栈：默认跟随系统代理，也可指定本地代理，兼容 HTTP/2
-  try {
-    const text = await fetchWithNet(url, proxy ? 25000 : 20000, proxy);
-    if (text && text.trim()) return text;
-    lastErr = new Error('订阅内容为空');
-  } catch (e) {
-    if (e.message !== 'NET_UNAVAILABLE') lastErr = e;
-  }
+  const attempt = (label, proxyAddr, ms) =>
+    new Promise((resolve) => {
+      fetchWithNet(url, ms, proxyAddr)
+        .then((text) => {
+          if (text && text.trim()) return resolve(text);
+          errors.push(`${label}：内容为空`);
+          resolve(null);
+        })
+        .catch((e) => {
+          // 非 Electron 环境（单测 / CLI）没有 net 模块，静默跳过
+          if (!e || e.message !== 'NET_UNAVAILABLE') errors.push(`${label}：${e && e.message}`);
+          resolve(null);
+        });
+    });
 
-  // 2) 回退到 Node https（超时就不再来一遍，避免让用户干等）
-  const timedOut = !!(lastErr && /超时/.test(lastErr.message));
-  if (!timedOut && (!lastErr || lastErr.message === '订阅内容为空')) {
-    for (let i = 0; i < SUB_UA.length; i += 1) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const text = await fetchUrl(url, i);
-        if (text && text.trim()) return text;
-        lastErr = new Error('订阅内容为空');
-      } catch (e) {
-        lastErr = e;
-      }
+  const tasks = [];
+  if (proxy) tasks.push(attempt(`代理 ${proxy}`, proxy, Math.max(timeout, 30000)));
+  tasks.push(attempt('直连', '', timeout));
+
+  // 竞速：第一个成功即返回，其余请求留在后台自然结束
+  const winner = await new Promise((resolve) => {
+    let pending = tasks.length;
+    tasks.forEach((p) =>
+      p.then((text) => {
+        if (text) return resolve(text);
+        pending -= 1;
+        if (pending === 0) resolve(null);
+      })
+    );
+  });
+  if (winner) return winner;
+
+  // Node https 兜底：超时说明网络根本不通，没必要把 3 个 UA 都跑一遍
+  for (let i = 0; i < SUB_UA.length; i += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const text = await fetchUrl(url, i);
+      if (text && text.trim()) return text;
+      errors.push('直连（Node）：内容为空');
+    } catch (e) {
+      errors.push(`直连（Node）：${e.message}`);
+      if (/超时/.test(e.message)) break;
     }
   }
 
-  // 3) 组合可读的错误信息
   const detail = await diagnose(url);
-  const head = lastErr ? lastErr.message : '订阅拉取失败';
-  throw new Error(`${head}。${detail}`);
+  const timedOut = errors.some((m) => /超时/.test(m));
+  const head = timedOut ? '订阅拉取超时' : '订阅拉取失败';
+  const tried = proxy ? `已尝试代理 ${proxy} 与直连` : '未配置拉取代理，仅尝试直连';
+  throw new Error(`${head}。${detail}（${tried}）`);
 }
 
 module.exports = { fetchSubscription, fetchUrl, fetchWithNet, diagnose, normalizeProxy, decodeBuffer, SUB_UA, POISON_IPS };

@@ -1,7 +1,7 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "代理池体检 + 系统代理工具",
   "main": "electron/main.js",
   "author": {
@@ -23,6 +23,7 @@
     "test-proxystate": "node scripts/test-proxystate.js",
     "test-ruleformat": "node scripts/test-ruleformat.js",
     "test-clash": "node scripts/test-clash.js",
+    "test-subscribe": "electron scripts/test-subscribe.js",
     "verify-routing": "node scripts/verify-routing.js",
     "verify-switch": "node scripts/verify-route-switch.js",
     "bump": "node scripts/bump-version.js",

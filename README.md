@@ -33,6 +33,7 @@ scripts/test-gateway.js     网关配置 + 真实内核启动测试（33 项）
 scripts/test-proxystate.js  代理状态机测试（18 项）
 scripts/test-ruleformat.js  分流规则格式测试（20 项）
 scripts/test-clash.js       Clash 配置导出测试（12 项，含 mihomo -t 校验）
+scripts/test-subscribe.js   订阅拉取测试（9 项，含本地代理命中与超时路径）
 ```
 
 改动文件：`electron/main.js`、`electron/preload.js`、`electron/lib/store.js`、
@@ -54,8 +55,12 @@ scripts/test-clash.js       Clash 配置导出测试（12 项，含 mihomo -t �
 
 - 「来源分面筛选」「节点右键菜单」：改动集中在 `renderer/app.js`，与 V2PTools 已分叉的
   渲染层（系统代理按钮 / 徽标 / 分流菜单）冲突面大，需要逐段手工移植，收益低于风险。
-- 订阅拉取代理设置项：上游只加了 UI 与 `normalizeProxy()`，`import:fetch` 调用点并未真正
-  传参，属于半成品，等上游接线完成再跟进。
+
+**领先上游的修复（1.0.6）**：
+
+- 订阅拉取真正接线代理：设置里可填「拉取订阅使用的代理」，留空时自动借用本机已开启的
+  代理内核端口；代理与直连并发竞速，谁先成功用谁，不再出现「先干等 30s 再超时」。
+- 失败信息带上 DNS 诊断与「已尝试代理 x / 仅直连」，能直接看出是墙、DNS 污染还是服务端问题。
 
 ---
 

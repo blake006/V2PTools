@@ -49,6 +49,8 @@ const DEFAULT_SETTINGS = {
   systemProxyBypass: '',
   systemProxyWinhttp: false,
   routeMode: 'global',
+  // 拉取订阅时用的代理（留空 = 自动：本机代理内核在跑就借用，否则直连）
+  subProxy: '',
 };
 
 module.exports = { Store, DEFAULT_SETTINGS };

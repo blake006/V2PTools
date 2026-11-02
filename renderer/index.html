@@ -438,6 +438,12 @@ Surge / Loon 配置、Quantumult X 配置、Base64 订阅内容"></textarea>
           <input type="checkbox" id="setProxyWinhttp" />
           <span>同时写入 WinHTTP 代理（影响系统服务，通常需要管理员权限）</span>
         </label>
+        <div class="section-title">订阅拉取</div>
+        <div class="field">
+          <label>拉取订阅使用的代理</label>
+          <input id="setSubProxy" class="input" type="text" placeholder="留空自动：本机代理在跑就借用，否则直连" spellcheck="false" />
+          <span class="tip">填本机代理端口即可（如 7890 或 127.0.0.1:7890）。被墙的订阅站必须走代理，留空时会自动借用已开启的系统代理。</span>
+        </div>
         <div class="field">
           <label>延迟检测地址（每行一个，留空使用默认）</label>
           <textarea id="setLatencyUrls" class="textarea textarea-sm" spellcheck="false" placeholder="http://cp.cloudflare.com/generate_204"></textarea>

@@ -1560,6 +1560,7 @@ function fillSettings() {
   $('#setProxyPort').value = s.systemProxyPort || 7890;
   $('#setProxyBypass').value = s.systemProxyBypass || '';
   $('#setProxyWinhttp').checked = !!s.systemProxyWinhttp;
+  $('#setSubProxy').value = s.subProxy || '';
   $('#setRouteMode').value = s.routeMode || 'global';
   $('#setProxyState').value =
     state.proxy && state.proxy.on ? `已开启 · 127.0.0.1:${state.proxy.gateway.port}` : '已关闭';
@@ -1581,6 +1582,7 @@ async function saveSettings() {
     systemProxyPort: Math.max(1024, Math.min(65535, parseInt($('#setProxyPort').value, 10) || 7890)),
     systemProxyBypass: $('#setProxyBypass').value.trim(),
     systemProxyWinhttp: $('#setProxyWinhttp').checked,
+    subProxy: $('#setSubProxy').value.trim(),
     routeMode: $('#setRouteMode').value,
   };
   await window.api.setStore('settings', state.settings);

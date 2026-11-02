@@ -66,7 +66,7 @@ function resolveRulesDir() {
 /* 订阅拉取                                                            */
 /* ------------------------------------------------------------------ */
 
-const { fetchSubscription } = require('./lib/subscribe');
+const { fetchSubscription, normalizeProxy } = require('./lib/subscribe');
 
 /* ------------------------------------------------------------------ */
 /* 窗口                                                                */
@@ -455,10 +455,36 @@ ipcMain.handle('import:parse', (e, payload) => {
   return res;
 });
 
+/**
+ * 订阅拉取走哪个代理：
+ *   1) 设置里显式填的「订阅拉取代理」
+ *   2) 本机代理内核正在跑 → 自动借用它的 mixed 端口
+ *   3) 都没有 → 直连
+ * 被墙的订阅站只有 1)/2) 能通，这也是之前「订阅拉取超时」的根因。
+ */
+function resolveSubProxy() {
+  const s = currentSettings();
+  const explicit = normalizeProxy(s.subProxy);
+  if (explicit) return { proxy: explicit, auto: false };
+  const gw = gateway ? gateway.status() : null;
+  if (gw && gw.running && gw.port) {
+    return { proxy: `127.0.0.1:${gw.port}`, auto: true };
+  }
+  return { proxy: '', auto: false };
+}
+
 ipcMain.handle('import:fetch', async (e, url) => {
-  const text = await fetchSubscription(url);
+  const { proxy, auto } = resolveSubProxy();
+  let text;
+  try {
+    text = await fetchSubscription(url, { proxy });
+  } catch (err) {
+    // 自动借用失败时说清楚用的是什么，避免用户以为「没走代理」
+    const hint = auto ? `；已自动借用本机代理 127.0.0.1:${proxy.split(':').pop()}` : '';
+    throw new Error(`${err.message}${hint}`);
+  }
   const res = parser.parseText(text, { group: new URL(url).hostname, source: url });
-  return { nodes: res.nodes, errors: res.errors, format: res.format, bytes: text.length };
+  return { nodes: res.nodes, errors: res.errors, format: res.format, bytes: text.length, viaProxy: proxy || '' };
 });
 
 ipcMain.handle('import:file', async () => {

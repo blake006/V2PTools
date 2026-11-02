@@ -95,5 +95,20 @@ app.whenReady().then(async () => {
   const res2 = await win.webContents.executeJavaScript(checks);
   console.log('--- 1080x660 ---');
   console.log(res2);
+
+  // 设置弹窗：确认「订阅拉取代理」字段存在且能回填（1.0.6 新增）
+  const settingsCheck = await win.webContents.executeJavaScript(`(() => {
+    document.querySelector('#btnSettings').click();
+    const el = document.querySelector('#setSubProxy');
+    return JSON.stringify({
+      modalOpen: document.querySelector('#settingsModal').classList.contains('open'),
+      hasSubProxy: !!el,
+      subProxyValue: el ? el.value : null,
+      subProxyVisible: el ? el.getBoundingClientRect().height > 0 : false,
+    });
+  })()`);
+  console.log('--- 设置弹窗 ---');
+  console.log(settingsCheck);
+  console.log('console errors:', errors.length ? errors : 'none');
   app.quit();
 });
