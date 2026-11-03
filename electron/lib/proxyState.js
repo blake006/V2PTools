@@ -37,6 +37,11 @@ function deriveProxyState(gw, sys) {
   const pointsHere = !!(sys && sys.server && target && sys.server === target);
   const knownBackup = !!(sys && sys.backup && sys.backup.target);
 
+  // TUN 模式：流量在网卡层就被接管，系统代理本来就该是关的，不能因此判成未开启
+  if (running && gw.tunMode) {
+    return gw.aliveFlag === false ? 'starting' : 'on';
+  }
+
   if (running && pointsHere) {
     // 内核在跑、代理也指着它，但存活自检明确失败 —— 说明内核僵了
     if (gw.aliveFlag === false) return 'starting';

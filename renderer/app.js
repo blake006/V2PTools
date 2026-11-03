@@ -1406,7 +1406,7 @@ function renderProxyState(st) {
   const btn = $('#btnProxy');
   btn.classList.toggle('on', on);
   btn.disabled = !state.nodes.length || state.proxyBusy;
-  $('#btnProxyText').textContent = on ? `代理 :${gw.port}` : '系统代理';
+  $('#btnProxyText').textContent = on ? (gw.tunMode ? `TUN :${gw.port}` : `代理 :${gw.port}`) : '系统代理';
   btn.title = on ? `系统代理已开启 → 127.0.0.1:${gw.port}（${routeLabel}），点击关闭` : '把选中的节点设为系统代理';
 
   const badge = $('#proxyBadge');
@@ -1419,7 +1419,7 @@ function renderProxyState(st) {
   const probe = gw.lastProbe;
   let text;
   if (pstate === 'on') {
-    text = `系统代理 · ${routeLabel}`;
+    text = `${gw.tunMode ? 'TUN 全局' : '系统代理'} · ${routeLabel}`;
     if (probe) text += probe.ok ? ` · ${probe.ip}` : ' · 链路异常';
   } else if (pstate === 'starting') {
     text = '系统代理 启动中…';
@@ -1531,15 +1531,16 @@ async function refreshProxyState() {
   return st;
 }
 
-async function enableSystemProxyById(id) {
+async function enableSystemProxyById(id, mode) {
   const n = state.nodes.find((x) => x.id === id);
   if (!n) return toast('找不到该节点', 'err');
   if (state.proxyBusy) return;
   state.proxyBusy = true;
   renderProxyState();
-  setStatus(`正在启动系统代理：${n.name || n.server}…`);
+  const label = mode === 'tun' ? 'TUN 全局接管' : '系统代理';
+  setStatus(`正在启动${label}：${n.name || n.server}…`);
   try {
-    const st = await window.api.proxyEnable(id);
+    const st = await window.api.proxyEnable(id, mode || 'system');
     if (st && st.error) {
       toast('开启失败：' + st.error, 'err');
       setStatus('系统代理开启失败');
@@ -1889,12 +1890,64 @@ $('#btnProxyMenu').addEventListener('click', (e) => {
   $('#proxyMenu').classList.toggle('open');
 });
 
+$('#btnTraffic').addEventListener('click', async () => {
+  const on = await window.api.trafficToggle();
+  toast(on ? '流量悬浮窗已打开' : '流量悬浮窗已关闭', 'ok', 2000);
+});
+
 $('#proxyMenu').addEventListener('click', (e) => {
+  const modeBtn = e.target.closest('[data-proxymode]');
+  if (modeBtn) {
+    $('#proxyMenu').classList.remove('open');
+    if (modeBtn.dataset.proxymode === 'tun') startTunMode();
+    else {
+      const id = pickProxyNode() || (state.proxy && state.proxy.gateway && state.proxy.gateway.node && state.proxy.gateway.node.id);
+      if (!id) return toast('请先勾选一个节点', 'err');
+      enableSystemProxyById(id, 'system');
+    }
+    return;
+  }
   const item = e.target.closest('[data-route]');
   if (!item) return;
   $('#proxyMenu').classList.remove('open');
   setRouteMode(item.dataset.route);
 });
+
+/**
+ * TUN 全局接管：先查 wintun / 管理员权限 / 是否已有其它虚拟网卡，
+ * 任何一项不满足都不硬开 —— 建出第二张 TUN 会把用户的网络搞乱
+ */
+async function startTunMode() {
+  const id = pickProxyNode() || (state.proxy && state.proxy.gateway && state.proxy.gateway.node && state.proxy.gateway.node.id);
+  if (!id) return toast('请先勾选一个节点', 'err');
+
+  setStatus('正在检查 TUN 环境…');
+  let ready = null;
+  try {
+    ready = await window.api.tunCheck();
+  } catch (e) {
+    ready = { ok: false, reasons: [e.message] };
+  }
+
+  if (!ready || !ready.ok) {
+    const reasons = (ready && ready.reasons) || ['未知原因'];
+    if (ready && ready.hasWintun === false) {
+      alert('无法开启 TUN：\n\n' + reasons.join('\n'));
+    } else if (ready && !ready.admin) {
+      const ok = confirm('TUN 模式需要管理员权限：\n\n' + reasons.join('\n') + '\n\n是否以管理员身份重启 V2PTools？');
+      if (ok) {
+        toast('正在以管理员身份重启…');
+        await window.api.relaunchElevated();
+      }
+    } else {
+      alert('无法开启 TUN 全局：\n\n' + reasons.join('\n'));
+    }
+    setStatus('');
+    return;
+  }
+
+  return enableSystemProxyById(id, 'tun');
+}
 
 /** 链路自检：直连 IP vs 经代理 IP，一眼看出代理到底有没有生效 */
 $('#menuProxyCheck').addEventListener('click', async (e) => {

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: rgba(18, 21, 28, 0.92);
+    --line: rgba(255, 255, 255, 0.1);
+    --text: #e8ecf4;
+    --dim: #8b93a4;
+    --up: #ff9f43;
+    --down: #4f8cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: transparent; overflow: hidden; }
+  body {
+    font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-app-region: drag;
+  }
+  .card {
+    height: 100%; border-radius: 12px; background: var(--bg);
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    padding: 8px 12px; display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .label { font-size: 10.5px; color: var(--dim); letter-spacing: .02em; }
+  .val { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
+  .up { color: var(--up); }
+  .down { color: var(--down); }
+  .total { font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .head { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,.7); }
+  .dot.off { background: #6b7280; box-shadow: none; }
+  .close {
+    -webkit-app-region: no-drag; cursor: pointer; color: var(--dim);
+    font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+  }
+  .close:hover { color: #fff; background: rgba(255,255,255,.1); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="row">
+      <div class="head"><span class="dot off" id="dot"></span><span class="label" id="title">流量</span></div>
+      <span class="close" id="close" title="关闭">×</span>
+    </div>
+    <div class="row">
+      <span class="label">↑ 上传</span><span class="val up" id="up">—</span>
+    </div>
+    <div class="row">
+      <span class="label">↓ 下载</span><span class="val down" id="down">—</span>
+    </div>
+    <div class="row">
+      <span class="label">累计</span><span class="total" id="total">—</span>
+    </div>
+  </div>
+<script>
+  const $ = (s) => document.querySelector(s);
+
+  function fmtSpeed(bps) {
+    if (bps == null || !isFinite(bps)) return '—';
+    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    let v = bps;
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + ' ' + units[i];
+  }
+
+  function fmtBytes(b) {
+    if (b == null || !isFinite(b)) return '—';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let v = b;
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' ' + units[i];
+  }
+
+  window.trafficApi.onData((d) => {
+    const on = !!d.running;
+    $('#dot').classList.toggle('off', !on);
+    $('#title').textContent = on ? (d.tunMode ? 'TUN 全局' : '系统代理') : '未开启';
+    $('#up').textContent = on ? fmtSpeed(d.up) : '—';
+    $('#down').textContent = on ? fmtSpeed(d.down) : '—';
+    $('#total').textContent = on ? `↑${fmtBytes(d.upTotal)} ↓${fmtBytes(d.downTotal)}` : '—';
+  });
+
+  $('#close').addEventListener('click', () => window.trafficApi.close());
+</script>
+</body>
+</html>

@@ -209,11 +209,37 @@ class Gateway {
       'geodata-mode': false,
       'global-client-fingerprint': conf['client-fingerprint'] || undefined,
       profile: { 'store-selected': false, 'store-fake-ip': false },
-      tun: { enable: false },
+      tun: opts.tun
+        ? {
+            enable: true,
+            // gvisor 在 Windows 上兼容性最好，system 栈对某些驱动/杀软更敏感
+            stack: 'gvisor',
+            device: 'V2PTools',
+            'auto-route': true,
+            'auto-detect-interface': true,
+            // 只劫持 DNS，不碰其他端口，减少与其它软件的摩擦
+            'dns-hijack': ['any:53'],
+            // strict-route 会在路由表里插更高优先级的规则，容易和别的 VPN 打架
+            'strict-route': false,
+            mtu: 1500,
+          }
+        : { enable: false },
       dns: {
         enable: true,
         ipv6: false,
-        'enhanced-mode': 'redir-host',
+        // TUN 接管后所有 DNS 都经过内核：必须用 fake-ip，否则国内 DNS 解析
+        // 境外域名会被污染，浏览器拿到假 IP 就是「代理开着打不开网页」
+        'enhanced-mode': opts.tun ? 'fake-ip' : 'redir-host',
+        'fake-ip-range': '198.18.0.1/16',
+        'fake-ip-filter': [
+          '*.lan',
+          '*.local',
+          'localhost.ptlogin2.qq.com',
+          '+.msftconnecttest.com',
+          '+.msftncsi.com',
+          'time.*.com',
+          'ntp.*.com',
+        ],
         'default-nameserver': ['223.5.5.5', '119.29.29.29'],
         nameserver: ['223.5.5.5', '119.29.29.29', '8.8.8.8'],
       },
@@ -263,9 +289,10 @@ class Gateway {
     this.port = port;
     this.ctlPort = ctlPort;
     this.routeMode = ROUTE_MODES[opts.routeMode] ? opts.routeMode : 'global';
+    this.tunMode = !!opts.tun;
     this.lastError = '';
 
-    const cfg = this.buildConfig(node, port, ctlPort, { routeMode: this.routeMode });
+    const cfg = this.buildConfig(node, port, ctlPort, { routeMode: this.routeMode, tun: this.tunMode });
     fs.mkdirSync(this.dataDir, { recursive: true });
     this.ensureLocalRules();
     fs.writeFileSync(this.configPath, yaml.dump(cfg, { lineWidth: 4096, noRefs: true }), 'utf8');
@@ -422,6 +449,7 @@ class Gateway {
       ctlPort: this.ctlPort,
       pid: this.proc ? this.proc.pid : 0,
       routeMode: this.routeMode,
+      tunMode: !!this.tunMode,
       routeLabel: (ROUTE_MODES[this.routeMode] || ROUTE_MODES.global).label,
       node: this.node
         ? { id: this.node.id, name: this.node.name, type: this.node.type, server: this.node.server, port: this.node.port }

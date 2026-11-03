@@ -3,6 +3,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { execFile } = require('child_process');
+const http = require('http');
 
 const { Store, DEFAULT_SETTINGS } = require('./lib/store');
 const parser = require('./lib/parser');
@@ -146,6 +148,13 @@ function createTray() {
           if (win) win.webContents.send('tray:toggle-proxy');
         },
       },
+      {
+        label: '流量悬浮窗',
+        click: () => {
+          if (trafficWin && !trafficWin.isDestroyed()) trafficWin.close();
+          else createTrafficWindow();
+        },
+      },
       { type: 'separator' },
       {
         label: '退出 V2PTools',
@@ -159,6 +168,146 @@ function createTray() {
   tray.on('double-click', showWindow);
   tray.on('click', showWindow);
 }
+
+/* ------------------------------------------------------------------ */
+/* 流量悬浮窗                                                          */
+/* ------------------------------------------------------------------ */
+
+let trafficWin = null;
+let trafficTimer = null;
+let lastTraffic = null;
+
+/** 读 mihomo 的 /connections：里面有累计上下行字节数，两次采样相减就是实时速度 */
+function fetchConnections() {
+  if (!gateway || !gateway.running || !gateway.ctlPort) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const req = http.get(
+      { host: '127.0.0.1', port: gateway.ctlPort, path: '/connections', timeout: 1500 },
+      (res) => {
+        let d = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => {
+          d += c;
+        });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(d));
+          } catch (e) {
+            resolve(null);
+          }
+        });
+      }
+    );
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
+}
+
+function pushTraffic() {
+  if (!trafficWin || trafficWin.isDestroyed()) return;
+  const running = !!(gateway && gateway.running);
+
+  fetchConnections().then((data) => {
+    if (!trafficWin || trafficWin.isDestroyed()) return;
+    const now = Date.now();
+    const down = data && typeof data.downloadTotal === 'number' ? data.downloadTotal : 0;
+    const up = data && typeof data.uploadTotal === 'number' ? data.uploadTotal : 0;
+
+    let spDown = 0;
+    let spUp = 0;
+    if (running && lastTraffic) {
+      const dt = Math.max(0.2, (now - lastTraffic.t) / 1000);
+      spDown = Math.max(0, (down - lastTraffic.down) / dt);
+      spUp = Math.max(0, (up - lastTraffic.up) / dt);
+    }
+    lastTraffic = running ? { t: now, down, up } : null;
+
+    trafficWin.webContents.send('traffic:data', {
+      running,
+      up: spUp,
+      down: spDown,
+      upTotal: up,
+      downTotal: down,
+      tunMode: !!(gateway && gateway.tunMode),
+    });
+  });
+}
+
+function startTrafficLoop() {
+  if (trafficTimer) return;
+  lastTraffic = null;
+  trafficTimer = setInterval(pushTraffic, 1000);
+  pushTraffic();
+}
+
+function stopTrafficLoop() {
+  if (trafficTimer) clearInterval(trafficTimer);
+  trafficTimer = null;
+  lastTraffic = null;
+}
+
+function createTrafficWindow() {
+  if (trafficWin && !trafficWin.isDestroyed()) {
+    trafficWin.show();
+    trafficWin.focus();
+    return trafficWin;
+  }
+
+  const saved = store.read('trafficPos.json', null);
+  const opts = {
+    width: 220,
+    height: 104,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-traffic.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  };
+  if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+    opts.x = saved.x;
+    opts.y = saved.y;
+  }
+
+  trafficWin = new BrowserWindow(opts);
+  trafficWin.loadFile(path.join(__dirname, '..', 'renderer', 'traffic.html'));
+  trafficWin.once('ready-to-show', () => trafficWin.show());
+  trafficWin.on('moved', () => {
+    if (!trafficWin) return;
+    const [x, y] = trafficWin.getPosition();
+    store.write('trafficPos.json', { x, y });
+  });
+  trafficWin.on('closed', () => {
+    trafficWin = null;
+    stopTrafficLoop();
+  });
+
+  startTrafficLoop();
+  return trafficWin;
+}
+
+ipcMain.handle('traffic:toggle', () => {
+  if (trafficWin && !trafficWin.isDestroyed()) {
+    trafficWin.close();
+    return false;
+  }
+  createTrafficWindow();
+  return true;
+});
+
+ipcMain.on('traffic:close', () => {
+  if (trafficWin && !trafficWin.isDestroyed()) trafficWin.close();
+});
 
 function createWindow() {
   bootLog('createWindow 开始');
@@ -337,11 +486,17 @@ async function proxyStatus() {
  * 开启系统代理：启动/切换到目标节点 → 把 Windows 系统代理指向本地 mixed 端口
  * @param {string} nodeId 节点 id
  */
-async function enableSystemProxy(nodeId) {
+async function enableSystemProxy(nodeId, mode = 'system') {
   if (process.platform !== 'win32') throw new Error('系统代理设置目前仅支持 Windows');
   const nodes = store.read('nodes.json', []);
   const node = nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error('找不到该节点，请重新导入后再试');
+
+  const wantTun = mode === 'tun';
+  if (wantTun) {
+    const ready = await checkTunReady();
+    if (!ready.ok) throw new Error(ready.reasons.join('；'));
+  }
 
   const s = currentSettings();
   const wantPort = Number(s.systemProxyPort) || DEFAULT_PORT;
@@ -349,15 +504,21 @@ async function enableSystemProxy(nodeId) {
   const bypass = s.systemProxyBypass && String(s.systemProxyBypass).trim() ? String(s.systemProxyBypass).trim() : DEFAULT_BYPASS;
 
   const sameNode = gateway.running && gateway.node && gateway.node.id === node.id;
-  if (!sameNode || gateway.port !== wantPort || gateway.routeMode !== routeMode) {
-    await gateway.start(node, { port: wantPort, routeMode });
+  const sameMode = !!gateway.tunMode === wantTun;
+  if (!sameNode || gateway.port !== wantPort || gateway.routeMode !== routeMode || !sameMode) {
+    await gateway.start(node, { port: wantPort, routeMode, tun: wantTun });
   }
 
-  try {
-    await sysproxy.apply({ port: gateway.port, bypass, winhttp: !!s.systemProxyWinhttp });
-  } catch (err) {
-    await gateway.stop().catch(() => {});
-    throw err;
+  if (wantTun) {
+    // TUN 已经在网卡层接管全部流量，再挂系统代理就是双重代理，必须还原掉
+    await sysproxy.restore().catch(() => {});
+  } else {
+    try {
+      await sysproxy.apply({ port: gateway.port, bypass, winhttp: !!s.systemProxyWinhttp });
+    } catch (err) {
+      await gateway.stop().catch(() => {});
+      throw err;
+    }
   }
 
   sendProxyState();
@@ -537,6 +698,14 @@ app.on('before-quit', async (e) => {
   quitting = true;
   e.preventDefault();
   stopProxyWatch();
+  stopTrafficLoop();
+  if (trafficWin && !trafficWin.isDestroyed()) {
+    try {
+      trafficWin.destroy();
+    } catch (err) {
+      /* 已销毁 */
+    }
+  }
   try {
     // 退出前必须还原系统代理，否则用户会「上不了网」
     if (sysproxy) await sysproxy.restore().catch(() => {});
@@ -839,11 +1008,81 @@ ipcMain.handle('proxy:status', async () => {
   }
 });
 
-ipcMain.handle('proxy:enable', async (e, nodeId) => {
+/* ------------------------------------------------------------------ */
+/* TUN 模式（虚拟网卡全局接管）                                        */
+/* ------------------------------------------------------------------ */
+
+/** wintun.dll 必须和 mihomo.exe 同目录，Windows 才会加载 */
+function wintunPath() {
+  try {
+    const beside = path.join(path.dirname(resolveCorePath()), 'wintun.dll');
+    if (fs.existsSync(beside)) return beside;
+  } catch (e) {
+    /* 开发环境内核路径可能还没就绪 */
+  }
+  const dev = path.join(__dirname, '..', 'vendor', 'wintun.dll');
+  return fs.existsSync(dev) ? dev : '';
+}
+
+/** 当前进程是否以管理员身份运行（TUN 建虚拟网卡必须） */
+function isElevated() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve(false);
+    execFile(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+      ],
+      { timeout: 6000, windowsHide: true },
+      (err, out) => resolve(!err && /true/i.test(String(out)))
+    );
+  });
+}
+
+/**
+ * 开启 TUN 前的环境检查。
+ * 宁可多问一句，也不要建出第二张虚拟网卡把用户网络搞乱。
+ */
+async function checkTunReady() {
+  const reasons = [];
+  const dll = wintunPath();
+  if (!dll) reasons.push('缺少 wintun.dll（虚拟网卡驱动），请使用完整压缩包');
+  const admin = await isElevated();
+  if (!admin) reasons.push('需要管理员权限才能创建虚拟网卡');
+  const conflicts = await detectConflicts().catch(() => null);
+  if (conflicts && conflicts.tunAdapters && conflicts.tunAdapters.length) {
+    reasons.push(`已有虚拟网卡 ${conflicts.tunAdapters.join('/')}，可能被其它 VPN 占用，请先退出它们`);
+  }
+  return { ok: reasons.length === 0, reasons, admin, hasWintun: !!dll, dll };
+}
+
+ipcMain.handle('proxy:tun-check', () => checkTunReady());
+
+/** 以管理员身份重启（TUN 需要提权，普通权限下引导用户重开） */
+ipcMain.handle('app:relaunch-elevated', async () => {
+  if (process.platform !== 'win32') return { ok: false, error: '仅支持 Windows' };
+  const exe = process.execPath;
+  const args = process.argv.slice(1).filter((a) => a && !a.startsWith('--'));
+  const argStr = args.map((a) => `'${String(a).replace(/'/g, "''")}'`).join(' ');
+  const cmd = args.length
+    ? `Start-Process -FilePath '${exe}' -ArgumentList ${argStr} -Verb RunAs`
+    : `Start-Process -FilePath '${exe}' -Verb RunAs`;
+  await new Promise((resolve) => {
+    execFile('powershell', ['-NoProfile', '-Command', cmd], { timeout: 12000, windowsHide: true }, () => resolve());
+  });
+  quitting = true;
+  app.quit();
+  return { ok: true };
+});
+
+ipcMain.handle('proxy:enable', async (e, nodeId, mode) => {
   // 检测用的是独立的 CoreManager 实例与端口，和 gateway 不冲突，可以同时开。
   // （以前这里直接拒绝，用户体检到一半想开代理只能干等）
   try {
-    const st = await enableSystemProxy(nodeId);
+    const st = await enableSystemProxy(nodeId, mode === 'tun' ? 'tun' : 'system');
     return st;
   } catch (err) {
     return { error: err.message };

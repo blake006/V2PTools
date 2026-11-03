@@ -23,7 +23,10 @@ contextBridge.exposeInMainWorld('api', {
 
   // 系统代理
   proxyStatus: () => ipcRenderer.invoke('proxy:status'),
-  proxyEnable: (nodeId) => ipcRenderer.invoke('proxy:enable', nodeId),
+  proxyEnable: (nodeId, mode) => ipcRenderer.invoke('proxy:enable', nodeId, mode),
+  tunCheck: () => ipcRenderer.invoke('proxy:tun-check'),
+  trafficToggle: () => ipcRenderer.invoke('traffic:toggle'),
+  relaunchElevated: () => ipcRenderer.invoke('app:relaunch-elevated'),
   proxyDisable: () => ipcRenderer.invoke('proxy:disable'),
   proxyCheck: () => ipcRenderer.invoke('proxy:check'),
   // 托盘菜单「开启/关闭系统代理」→ 交给渲染层复用同一套逻辑

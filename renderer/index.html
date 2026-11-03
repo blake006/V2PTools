@@ -77,10 +77,16 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v9" stroke-linecap="round"/><path d="M6.4 6.4a8 8 0 1 0 11.2 0" stroke-linecap="round"/></svg>
             <span id="btnProxyText">系统代理</span>
           </button>
-          <button class="btn btn-split" id="btnProxyMenu" title="切换分流方式">
+          <button class="btn btn-split" id="btnProxyMenu" title="切换接管方式 / 分流方式">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
+          <button class="btn btn-split" id="btnTraffic" title="流量悬浮窗（实时上下行 + 累计）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20V7" stroke-linecap="round"/></svg>
+          </button>
           <div class="menu menu-right" id="proxyMenu">
+            <div class="menu-head">接管方式</div>
+            <button data-proxymode="system"><b>系统代理</b><span>只影响跟随系统代理的程序</span></button>
+            <button data-proxymode="tun"><b>TUN 全局</b><span>网卡层接管全部流量（需管理员）</span></button>
             <div class="menu-head">分流方式</div>
             <button data-route="global"><b>全局代理</b><span>所有流量都走节点</span></button>
             <button data-route="bypass-cn"><b>绕过大陆</b><span>国内直连，其余走节点</span></button>
