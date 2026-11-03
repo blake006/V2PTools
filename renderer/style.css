@@ -22,15 +22,15 @@
 }
 
 [data-theme='light'] {
-  --bg: #f5f7fb;
-  --bg-elev: #ffffff;
-  --bg-elev-2: #f7f9fd;
-  --bg-hover: #eef2f9;
-  --border: #e2e7f0;
-  --border-soft: #eef1f7;
-  --text: #1a1f2b;
-  --text-dim: #5c6579;
-  --text-faint: #8b93a6;
+  --bg: #eef1f6;
+  --bg-elev: #f8fafc;
+  --bg-elev-2: #eaeff6;
+  --bg-hover: #e2e8f1;
+  --border: #d8e0ea;
+  --border-soft: #e5eaf2;
+  --text: #222834;
+  --text-dim: #59637a;
+  --text-faint: #8a93a4;
   --accent: #2f6df6;
   --accent-soft: rgba(47, 109, 246, 0.1);
   --ok: #12a86b;
@@ -590,6 +590,10 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .chips.small .chip { height: 24px; padding: 0 9px; font-size: 11.5px; border: 1px solid var(--border); }
 .chips.small .chip.active { border-color: rgba(79,140,255,.35); }
 .chips.small { flex-wrap: wrap; }
+
+/* IP 类型 6 个选项排成一行：原来换行后「未知」单独占一行，很难看 */
+#fIpTypes { flex-wrap: nowrap; gap: 4px; }
+#fIpTypes .chip { padding: 0 7px; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
 
 input[type='range'] {
   appearance: none; width: 100%; height: 4px; border-radius: 3px;

@@ -1,8 +1,11 @@
 'use strict';
 
 /**
- * 版本号递增：1.0.0 → 1.0.1 → 1.0.2 …（只动 patch 位，按项目约定顺次递增）
- * 用法: npm run bump
+ * 版本号递增，项目约定：
+ *   1.1.0 → 1.1.1 → … → 1.1.10 → 1.2.0 → 1.2.1 … → 1.2.10 → 1.3.0
+ * 即 patch 最多到 10，超过就进位到 minor。
+ *
+ * 用法: npm run bump            （按上面的规则自动进位）
  *       npm run bump -- 1.0.5   （显式指定版本）
  */
 
@@ -36,7 +39,8 @@ if (arg) {
   next = arg;
 } else {
   const [major, minor, patch] = pkg.version.split('.').map(Number);
-  next = `${major}.${minor}.${patch + 1}`;
+  // patch 到 10 就进位：1.1.10 → 1.2.0
+  next = patch >= 10 ? `${major}.${minor + 1}.0` : `${major}.${minor}.${patch + 1}`;
 }
 
 pkg.version = next;

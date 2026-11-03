@@ -43,6 +43,9 @@ const DEFAULT_BYPASS = [
   '172.31.*',
   '192.168.*',
   '<local>',
+  // 新版 Windows 需要 <-loopback> 才会让本机回环也走 bypass，
+  // 否则 127.0.0.1 的请求会被代理再绕一圈
+  '<-loopback>',
 ].join(';');
 
 /* ------------------------------------------------------------------ */
@@ -174,6 +177,9 @@ class SystemProxy {
     await put('ProxyServer', 'REG_SZ', snap.proxyServer);
     await put('ProxyOverride', 'REG_SZ', snap.proxyOverride);
     await put('AutoConfigURL', 'REG_SZ', snap.autoConfigUrl);
+    // AutoDetect（WPAD 自动检测）必须一起还原：开启代理时我们会把它关掉，
+    // 不还原的话用户原有的「自动检测设置」就被永久改了
+    await put('AutoDetect', 'REG_SZ', snap.autoDetect ? '1' : '0');
     return true;
   }
 
@@ -279,6 +285,9 @@ class SystemProxy {
       await this.setValue('ProxyOverride', 'REG_SZ', bypass);
       // PAC 脚本优先级高于固定代理，开启固定代理时先移除（原始值已备份）
       await this.deleteValue('AutoConfigURL');
+      // WPAD 自动检测同样会抢走手动代理设置（部分程序优先用它），必须关掉；
+      // 原值已备份，关闭代理时会还原
+      await this.setValue('AutoDetect', 'REG_SZ', '0');
     } catch (err) {
       this.lastError = err.message;
       // 写入失败则尽量回滚，避免系统代理停在半配置状态
