@@ -1630,6 +1630,12 @@ async function init() {
 
   // 窗口标题带版本号：任务栏悬停 / Alt+Tab 都能直接看到
   document.title = `V2PTools v${info.appVersion} · 代理体检与系统代理`;
+  // 状态栏右下角也显示版本号（和 IPHealth 一致，方便确认装的是哪一版）
+  const verEl = $('#appVersion');
+  if (verEl) {
+    verEl.textContent = 'v' + info.appVersion + (info.isPackaged ? '' : ' dev');
+    verEl.title = `V2PTools ${info.appVersion} · Electron ${info.electron} · ${info.platform}/${info.arch}`;
+  }
 
   $('#aboutBox').innerHTML = `
     <div><b>版本</b> ${info.appVersion} · Electron ${info.electron} · ${info.platform}/${info.arch}</div>
@@ -1804,6 +1810,28 @@ $('#proxyMenu').addEventListener('click', (e) => {
   if (!item) return;
   $('#proxyMenu').classList.remove('open');
   setRouteMode(item.dataset.route);
+});
+
+/** 链路自检：直连 IP vs 经代理 IP，一眼看出代理到底有没有生效 */
+$('#menuProxyCheck').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  $('#proxyMenu').classList.remove('open');
+  $('#statusText').textContent = '正在做链路自检…';
+  const r = await window.api.proxyCheck();
+  const lines = [];
+  lines.push(r.system.active ? `系统代理：${r.system.server || '已开启'}` : '系统代理：未开启');
+  lines.push(r.gateway.running
+    ? `内核：运行中，端口 ${r.gateway.port}（${r.gateway.routeLabel || '全局代理'}）`
+    : '内核：未运行');
+  lines.push(r.via && r.via.ok ? `经代理出口：${r.via.ip}` : `经代理出口：失败（${(r.via && r.via.error) || '未开启'}）`);
+  lines.push(r.direct && r.direct.ok ? `直连出口：${r.direct.ip}` : '直连出口：失败（可能本机无外网）');
+  if (r.via && r.via.ok && r.direct && r.direct.ok) {
+    lines.push('');
+    lines.push(r.same ? '两个 IP 相同 → 流量没走代理，检查系统代理是否被其它软件改掉' : '两个 IP 不同 → 代理已生效');
+  }
+  if (r.gateway.node) lines.push(`\n节点：${r.gateway.node.name}（${r.gateway.node.server}:${r.gateway.node.port}）`);
+  alert(lines.join('\n'));
+  $('#statusText').textContent = r.same ? '自检：代理未生效' : r.via && r.via.ok ? '自检：代理已生效' : '自检：代理链路异常';
 });
 $('#proxyBadge').addEventListener('click', toggleSystemProxy);
 

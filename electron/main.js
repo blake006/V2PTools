@@ -11,6 +11,7 @@ const { Runner } = require('./lib/runner');
 const clash = require('./lib/clash');
 const { SystemProxy, DEFAULT_BYPASS } = require('./lib/sysproxy');
 const { Gateway, DEFAULT_PORT, ROUTE_MODES } = require('./lib/gateway');
+const { fetchExitIP } = require('./lib/tester');
 const { deriveProxyState, pickRouteMode, STATE_TEXT } = require('./lib/proxyState');
 
 const isDev = process.argv.includes('--dev');
@@ -758,13 +759,38 @@ ipcMain.handle('proxy:status', async () => {
 });
 
 ipcMain.handle('proxy:enable', async (e, nodeId) => {
-  if (runner) return { error: '检测进行中，请等待检测结束后再开启系统代理' };
+  // 检测用的是独立的 CoreManager 实例与端口，和 gateway 不冲突，可以同时开。
+  // （以前这里直接拒绝，用户体检到一半想开代理只能干等）
   try {
     const st = await enableSystemProxy(nodeId);
     return st;
   } catch (err) {
     return { error: err.message };
   }
+});
+
+/**
+ * 链路自检：分别用「本机代理端口」和「直连」查一次出口 IP。
+ * 两个 IP 不同 = 代理真的生效；相同 = 流量没走代理（或节点本身是国内出口）。
+ */
+ipcMain.handle('proxy:check', async () => {
+  const gw = gateway ? gateway.status() : { running: false, port: 0, node: null };
+  const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
+
+  const [direct, via] = await Promise.all([
+    fetchExitIP(0, { timeout: 8000 }).catch((e) => ({ ok: false, error: e.message })),
+    gw.running
+      ? fetchExitIP(gw.port, { timeout: 12000 }).catch((e) => ({ ok: false, error: e.message }))
+      : Promise.resolve({ ok: false, error: '内核未运行' }),
+  ]);
+
+  return {
+    gateway: gw,
+    system: sys,
+    direct,
+    via,
+    same: !!(via && via.ok && direct && direct.ok && via.ip === direct.ip),
+  };
 });
 
 ipcMain.handle('proxy:disable', async () => {

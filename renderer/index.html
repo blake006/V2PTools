@@ -85,6 +85,8 @@
             <button data-route="global"><b>全局代理</b><span>所有流量都走节点</span></button>
             <button data-route="bypass-cn"><b>绕过大陆</b><span>国内直连，其余走节点</span></button>
             <button data-route="proxy-list"><b>仅名单代理</b><span>只有名单内站点走节点</span></button>
+            <div class="menu-head">排查</div>
+            <button id="menuProxyCheck"><b>链路自检</b><span>对比直连 IP 与代理出口 IP</span></button>
           </div>
         </div>
       </div>
@@ -282,6 +284,8 @@
         <span id="coreVersion">内核 —</span>
         <span class="sep">·</span>
         <span id="selCount">已选 0</span>
+        <span class="sep">·</span>
+        <span id="appVersion">v—</span>
       </div>
     </footer>
   </div>
