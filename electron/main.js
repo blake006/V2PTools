@@ -11,7 +11,7 @@ const { Runner } = require('./lib/runner');
 const clash = require('./lib/clash');
 const { SystemProxy, DEFAULT_BYPASS } = require('./lib/sysproxy');
 const { Gateway, DEFAULT_PORT, ROUTE_MODES } = require('./lib/gateway');
-const { fetchExitIP } = require('./lib/tester');
+const { fetchExitIP, requestThrough } = require('./lib/tester');
 const { deriveProxyState, pickRouteMode, STATE_TEXT } = require('./lib/proxyState');
 
 const isDev = process.argv.includes('--dev');
@@ -777,10 +777,17 @@ ipcMain.handle('proxy:check', async () => {
   const gw = gateway ? gateway.status() : { running: false, port: 0, node: null };
   const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
 
-  const [direct, via] = await Promise.all([
+  const [direct, via, https] = await Promise.all([
     fetchExitIP(0, { timeout: 8000 }).catch((e) => ({ ok: false, error: e.message })),
     gw.running
       ? fetchExitIP(gw.port, { timeout: 12000 }).catch((e) => ({ ok: false, error: e.message }))
+      : Promise.resolve({ ok: false, error: '内核未运行' }),
+    // 只测 HTTP 会误判：代理能过 HTTP 但 HTTPS（CONNECT）不通的情况真实存在，
+    // 浏览器打不开网页恰恰是后者
+    gw.running
+      ? requestThrough(gw.port, 'https://www.gstatic.com/generate_204', { timeout: 12000, wantBody: false })
+          .then((r) => ({ ok: r.ok && r.status < 400, status: r.status, ms: r.ms, error: r.error }))
+          .catch((e) => ({ ok: false, error: e.message }))
       : Promise.resolve({ ok: false, error: '内核未运行' }),
   ]);
 
@@ -789,6 +796,7 @@ ipcMain.handle('proxy:check', async () => {
     system: sys,
     direct,
     via,
+    https,
     same: !!(via && via.ok && direct && direct.ok && via.ip === direct.ip),
   };
 });

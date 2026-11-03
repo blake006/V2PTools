@@ -237,6 +237,7 @@ table.grid { width: 100%; min-width: 1180px; border-collapse: separate; border-s
 .col-ip { width: 132px; }
 .col-loc { width: 138px; }
 .col-isp { width: 150px; }
+.col-iptype { width: 84px; }
 .col-health { width: 118px; }
 .col-act { width: 62px; }
 

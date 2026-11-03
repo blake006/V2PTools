@@ -338,6 +338,7 @@ function rowHtml(n) {
     <td class="col-ip mono" data-cell="ip">${n.ip ? esc(n.ip) : '<span class="dim">—</span>'}</td>
     <td class="col-loc" data-cell="loc">${locHtml(n)}</td>
     <td class="col-isp dim" data-cell="isp" title="${esc(n.isp || '')}">${esc(n.isp || '—')}</td>
+    <td class="col-iptype" data-cell="iptype">${ipTypeCell(n)}</td>
     <td class="col-health" data-cell="health">${healthHtml(n)}</td>
     <td class="col-act">
       <div class="row-act">
@@ -365,6 +366,16 @@ function locHtml(n) {
     .filter((v) => v !== n.country)
     .join(' · ');
   return `${flag}${esc(main)}${sub ? `<span class="dim" style="margin-left:6px;font-size:11.5px">${esc(sub)}</span>` : ''}`;
+}
+
+/** 表格里的 IP 类型单元格：颜色区分住宅/机房/代理，悬停看判定依据 */
+function ipTypeCell(n) {
+  if (!n.ipType) return '<span class="dim">—</span>';
+  const key = n.ipTypeKey || 'unknown';
+  const cls = { residential: 'ok', hosting: 'bad', proxy: 'warn', mobile: '', unknown: 'dim' }[key] || '';
+  const why = (n.ipTypeReasons || []).join('；');
+  const conf = n.ipTypeConfidence ? `（置信度 ${n.ipTypeConfidence}%）` : '';
+  return `<span class="pill ${cls}" title="${esc(why + conf)}">${esc(n.ipType)}</span>`;
 }
 
 function healthHtml(n) {
@@ -419,6 +430,7 @@ function updateRow(n) {
   set('ip', n.ip ? esc(n.ip) : '<span class="dim">—</span>');
   set('loc', locHtml(n));
   set('isp', esc(n.isp || '—'));
+  set('iptype', ipTypeCell(n));
   set('health', healthHtml(n));
   tr.style.display = nodeVisible(n) ? '' : 'none';
 }
@@ -783,7 +795,29 @@ function renderMoveGroupPanel() {
     items.join('') +
     `<button class="move-item" data-move="">未分组</button>
      <div class="fsep"></div>
-     <button class="move-item" data-move="__new__" style="color:var(--accent)">＋ 新建分组…</button>`;
+     <button class="move-item" data-move="__new__" style="color:var(--accent)">＋ 新建分组…</button>
+     <div class="fsep"></div>
+     <button class="move-item" data-auto-group="country">按地区自动分组</button>
+     <button class="move-item" data-auto-group="type">按协议自动分组</button>`;
+}
+
+/** 一键按地区 / 协议重新分组（IPHealth 的「自动分组」，省得手动一个个拖） */
+function autoGroupBy(kind) {
+  if (!state.nodes.length) return toast('还没有节点', 'err');
+  let changed = 0;
+  state.nodes.forEach((n) => {
+    let g = '';
+    if (kind === 'country') {
+      g = n.country || n.countryCode || '未知地区';
+    } else {
+      g = TYPE_LABEL[n.type] || n.type || '未知协议';
+    }
+    if (n.group !== g) changed += 1;
+    n.group = g;
+  });
+  saveNodes();
+  renderAll();
+  toast(`已按${kind === 'country' ? '地区' : '协议'}重新分组（${changed} 个节点变更）`, 'ok');
 }
 
 /* ---- 高级筛选面板 ---- */
@@ -1655,7 +1689,13 @@ async function init() {
   const verEl = $('#appVersion');
   if (verEl) {
     verEl.textContent = 'v' + info.appVersion + (info.isPackaged ? '' : ' dev');
-    verEl.title = `V2PTools ${info.appVersion} · Electron ${info.electron} · ${info.platform}/${info.arch}`;
+    verEl.title = `V2PTools ${info.appVersion} · Electron ${info.electron} · ${info.platform}/${info.arch}（点击打开设置）`;
+    verEl.style.cursor = 'pointer';
+    // 和 IPHealth 一样：点版本号直接进设置
+    verEl.addEventListener('click', () => {
+      fillSettings();
+      openModal('settingsModal');
+    });
   }
 
   $('#aboutBox').innerHTML = `
@@ -1845,10 +1885,17 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
     ? `内核：运行中，端口 ${r.gateway.port}（${r.gateway.routeLabel || '全局代理'}）`
     : '内核：未运行');
   lines.push(r.via && r.via.ok ? `经代理出口：${r.via.ip}` : `经代理出口：失败（${(r.via && r.via.error) || '未开启'}）`);
+  lines.push(r.https && r.https.ok
+    ? `HTTPS 经代理：通过（HTTP ${r.https.status}${r.https.ms ? ' · ' + r.https.ms + 'ms' : ''}）`
+    : `HTTPS 经代理：失败（${(r.https && r.https.error) || '未开启'}）`);
   lines.push(r.direct && r.direct.ok ? `直连出口：${r.direct.ip}` : '直连出口：失败（可能本机无外网）');
   if (r.via && r.via.ok && r.direct && r.direct.ok) {
     lines.push('');
     lines.push(r.same ? '两个 IP 相同 → 流量没走代理，检查系统代理是否被其它软件改掉' : '两个 IP 不同 → 代理已生效');
+  }
+  if (r.via && r.via.ok && r.https && !r.https.ok) {
+    lines.push('');
+    lines.push('HTTP 通但 HTTPS 不通：多半是浏览器没走系统代理（扩展 / QUIC），或节点屏蔽了该站点');
   }
   if (r.gateway.node) lines.push(`\n节点：${r.gateway.node.name}（${r.gateway.node.server}:${r.gateway.node.port}）`);
   alert(lines.join('\n'));
@@ -1903,6 +1950,12 @@ function bindFilterUI() {
     $('#moveGroupPanel').classList.toggle('open');
   });
   $('#moveGroupList').addEventListener('click', async (e) => {
+    const ag = e.target.closest('[data-auto-group]');
+    if (ag) {
+      $('#moveGroupPanel').classList.remove('open');
+      autoGroupBy(ag.dataset.autoGroup);
+      return;
+    }
     const b = e.target.closest('[data-move]');
     if (!b) return;
     const val = b.dataset.move;
