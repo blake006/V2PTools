@@ -5,8 +5,7 @@ on:
     branches: [main]
     paths:
       - 'android/**'
-      - '.github/workflows/android.yml'
-  pull_request:
+      - '.github/workflows/android.yml'  pull_request:
     paths:
       - 'android/**'
   workflow_dispatch:
@@ -24,6 +23,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    permissions:
+      contents: write
 
     steps:
       - name: 检出代码
@@ -115,6 +116,24 @@ jobs:
           path: out/*.apk
           retention-days: 30
           if-no-files-found: error
+
+      # 顺手把 APK 传进最新的 Release：本地从 Actions 下载几十 MB 经常被重置，
+      # 让 GitHub 内部网络直接传给 Release 更可靠（没有 Release 时跳过）
+      - name: 同步 APK 到最新 Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          if [ -z "$TAG" ]; then
+            echo "还没有 Release，跳过"
+            exit 0
+          fi
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts | head -1)
+          cp out/app-debug.apk "out/V2PTools-android-${VER}-debug.apk"
+          gh release upload "$TAG" "out/V2PTools-android-${VER}-debug.apk" --clobber
+          echo "已上传到 $TAG：V2PTools-android-${VER}-debug.apk"
 
       - name: 编译失败时输出 Gradle 日志
         if: failure()
