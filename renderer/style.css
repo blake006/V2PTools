@@ -694,3 +694,10 @@ tr.in-use .row-act { opacity: 1; }
   background: var(--bg-hover); color: var(--text-dim);
   max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* 延迟趋势迷你图 */
+.spark { width: 100%; height: 56px; display: block; margin: 4px 0 2px; }
+.spark-legend {
+  display: flex; gap: 12px; font-size: 11px; color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}

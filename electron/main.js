@@ -15,6 +15,8 @@ const { SystemProxy, DEFAULT_BYPASS } = require('./lib/sysproxy');
 const { Gateway, DEFAULT_PORT, ROUTE_MODES } = require('./lib/gateway');
 const { fetchExitIP, requestThrough } = require('./lib/tester');
 const { detectConflicts } = require('./lib/netcheck');
+const { buildSingBox } = require('./lib/exporters');
+const QRCode = require('qrcode');
 const { deriveProxyState, pickRouteMode, STATE_TEXT } = require('./lib/proxyState');
 
 const isDev = process.argv.includes('--dev');
@@ -944,6 +946,28 @@ ipcMain.handle('export:save', async (e, payload) => {
   return { ok: true, path: r.filePath };
 });
 
+/** 导出为 sing-box 配置（JSON） */
+ipcMain.handle('export:singbox', async (e, payload) => {
+  const { nodes, defaultName } = payload || {};
+  let built;
+  try {
+    built = buildSingBox(nodes || []);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  if (!built.count) {
+    return { ok: false, error: '所选节点类型暂不支持导出为 sing-box' };
+  }
+  const r = await dialog.showSaveDialog(win, {
+    title: '导出 sing-box 配置',
+    defaultPath: defaultName || 'v2ptools-singbox',
+    filters: [{ name: 'sing-box 配置', extensions: ['json'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+  fs.writeFileSync(r.filePath, JSON.stringify(built.config, null, 2), 'utf8');
+  return { ok: true, path: r.filePath, count: built.count, skipped: built.skipped };
+});
+
 /** 导出为 Clash / mihomo 配置（YAML）—— 同步自 IPHealth 1.0.3 */
 ipcMain.handle('export:clash', async (e, payload) => {
   const { nodes, defaultName, opts } = payload || {};
@@ -1060,6 +1084,16 @@ async function checkTunReady() {
 }
 
 ipcMain.handle('proxy:tun-check', () => checkTunReady());
+
+/** 节点二维码：把分享链接画成图，手机扫码直接导入 */
+ipcMain.handle('qr:make', async (e, text) => {
+  try {
+    const dataUrl = await QRCode.toDataURL(String(text || ''), { margin: 1, width: 320, errorCorrectionLevel: 'M' });
+    return { ok: true, dataUrl };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
 
 /** 以管理员身份重启（TUN 需要提权，普通权限下引导用户重开） */
 ipcMain.handle('app:relaunch-elevated', async () => {

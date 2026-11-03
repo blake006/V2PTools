@@ -91,6 +91,7 @@
     concurrency: 6,
     latencyTimeout: 6000,
     speedBytes: 5000000,
+    syncInterval: 0,
     routeMode: 'bypass-cn',
     mixedPort: 7890,
     ctlPort: 9090,
@@ -615,6 +616,17 @@
     toast('已更新：新增 ' + r.added + ' 个' + (r.viaNode ? '（经节点「' + r.viaNode + '」）' : ''), 'ok', 4000);
   }
 
+  var syncTimer = null;
+  function startSyncTimer() {
+    if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+    var mins = Number(state.settings.syncInterval) || 0;
+    if (!mins) return;
+    syncTimer = setInterval(function () {
+      if (!state.sources.length || state.testing) return;
+      syncAllSources();
+    }, Math.max(5, mins) * 60000);
+  }
+
   async function syncAllSources() {
     if (state.testing) return toast('体检进行中，稍后再更新订阅', 'err');
     if (!state.sources.length) return toast('还没有订阅源', 'err');
@@ -782,6 +794,11 @@
     if (sp && sp.ok) n.speed = sp.mbps;
 
     n.health = healthOf(n);
+
+    // 留最近 20 次：判断节点是一直这么慢还是这次抽风
+    n.history = (Array.isArray(n.history) ? n.history : [])
+      .concat([{ t: Date.now(), latency: n.latency, speed: n.speed == null ? null : n.speed }])
+      .slice(-20);
   }
 
   async function runTest(mode) {
@@ -932,6 +949,82 @@
 
   /* ================= 导出 ================= */
 
+  /** 节点 → sing-box outbound（只覆盖常见协议，其它跳过） */
+  function toSingBoxOutbound(n) {
+    var c = n.conf || {};
+    var base = { tag: n.name || (n.server + ':' + n.port), server: n.server, server_port: Number(n.port) };
+    function tls() {
+      var t = { enabled: true, server_name: c.servername || c.sni || undefined, insecure: !!c['skip-cert-verify'] };
+      if (c['client-fingerprint']) t.utls = { enabled: true, fingerprint: c['client-fingerprint'] };
+      var re = c['reality-opts'];
+      if (re && re['public-key']) t.reality = { enabled: true, public_key: re['public-key'], short_id: re['short-id'] || '' };
+      return t;
+    }
+    function transport() {
+      var net = c.network || 'tcp';
+      if (net === 'ws') {
+        var ws = c['ws-opts'] || {};
+        return { type: 'ws', path: ws.path || '/', headers: ws.headers && ws.headers.Host ? { Host: ws.headers.Host } : undefined };
+      }
+      if (net === 'grpc') {
+        var g = c['grpc-opts'] || {};
+        return { type: 'grpc', service_name: g['grpc-service-name'] || '' };
+      }
+      return null;
+    }
+
+    var o;
+    if (n.type === 'vmess') {
+      o = Object.assign({ type: 'vmess' }, base, { uuid: c.uuid, security: c.cipher || 'auto', alter_id: Number(c.alterId || 0) });
+      if (c.tls) o.tls = tls();
+      var t1 = transport(); if (t1) o.transport = t1;
+      return o;
+    }
+    if (n.type === 'vless') {
+      o = Object.assign({ type: 'vless' }, base, { uuid: c.uuid });
+      if (c.flow) o.flow = c.flow;
+      if (c.tls) o.tls = tls();
+      var t2 = transport(); if (t2) o.transport = t2;
+      return o;
+    }
+    if (n.type === 'trojan') {
+      o = Object.assign({ type: 'trojan' }, base, { password: c.password, tls: tls() });
+      var t3 = transport(); if (t3) o.transport = t3;
+      return o;
+    }
+    if (n.type === 'ss') return Object.assign({ type: 'shadowsocks' }, base, { method: c.cipher, password: c.password });
+    if (n.type === 'hysteria2') {
+      o = Object.assign({ type: 'hysteria2' }, base, { password: c.password || c.auth || '', tls: tls() });
+      if (c.obfs) o.obfs = { type: c.obfs, password: c['obfs-password'] || '' };
+      return o;
+    }
+    if (n.type === 'tuic') return Object.assign({ type: 'tuic' }, base, { uuid: c.uuid, password: c.password, tls: tls() });
+    if (n.type === 'socks5') return Object.assign({ type: 'socks' }, base, { version: '5', username: c.username || undefined, password: c.password || undefined });
+    if (n.type === 'http') return Object.assign({ type: 'http' }, base, { username: c.username || undefined, password: c.password || undefined });
+    return null;
+  }
+
+  function buildSingBoxConfig(list) {
+    var outbounds = [];
+    list.forEach(function (n) {
+      var o = toSingBoxOutbound(n);
+      if (!o) return;
+      var tag = o.tag, i = 2;
+      while (outbounds.some(function (x) { return x.tag === tag; })) { tag = o.tag + ' (' + i + ')'; i += 1; }
+      o.tag = tag;
+      outbounds.push(o);
+    });
+    var tags = outbounds.map(function (o) { return o.tag; });
+    return {
+      log: { level: 'info', timestamp: true },
+      inbounds: [{ type: 'mixed', tag: 'mixed-in', listen: '127.0.0.1', listen_port: 7890 }],
+      outbounds: [{ type: 'selector', tag: 'proxy', outbounds: tags.length ? tags : ['direct'], default: tags[0] || 'direct' }]
+        .concat(outbounds)
+        .concat([{ type: 'direct', tag: 'direct' }]),
+      route: { rules: [], final: 'proxy' },
+    };
+  }
+
   function buildExport(kind, list) {
     list = list || sortedNodes();
     if (!list.length) list = state.nodes;
@@ -940,6 +1033,12 @@
       return null;
     }
 
+    if (kind === 'singbox') {
+      var sb = buildSingBoxConfig(list);
+      var okCount = sb.outbounds.length - 2;
+      if (!okCount) { toast('这些节点类型暂不支持导出为 sing-box', 'err'); return null; }
+      return { name: 'v2ptools-singbox.json', content: JSON.stringify(sb, null, 2), count: okCount };
+    }
     if (kind === 'clash') {
       var built = V2P.clash.buildClashYaml(list, {});
       return { name: 'v2ptools-clash.yaml', content: built.text, count: built.count };
@@ -1247,20 +1346,35 @@
     $('#setConcurrency').value = state.settings.concurrency;
     $('#setTimeout').value = Math.round((state.settings.latencyTimeout || 6000) / 100) / 10;
     $('#setSpeedBytes').value = Math.round((state.settings.speedBytes || 5000000) / 1000000);
+    var siEl = $('#setSyncInterval');
+    if (siEl) siEl.value = String(state.settings.syncInterval || 0);
     var btn = $('#btnTheme');
-    if (btn) btn.textContent = state.settings.theme === 'light' ? '切换深色' : '切换浅色';
+    if (btn) {
+      var tm = state.settings.theme;
+      btn.textContent = tm === 'system' ? '跟随系统' : tm === 'light' ? '浅色' : '深色';
+    }
   }
 
   /** 主题：只切 body 上的类，颜色全在 CSS 变量里 */
+  function resolveTheme() {
+    var t = state.settings.theme;
+    if (t === 'light' || t === 'dark') return t;
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return dark ? 'dark' : 'light';
+  }
+
   function applyTheme() {
-    document.body.classList.toggle('light', state.settings.theme === 'light');
+    document.body.classList.toggle('light', resolveTheme() === 'light');
   }
 
   $('#btnTheme').addEventListener('click', function () {
-    state.settings.theme = state.settings.theme === 'light' ? 'dark' : 'light';
+    var order = ['dark', 'light', 'system'];
+    var i = order.indexOf(state.settings.theme);
+    state.settings.theme = order[((i < 0 ? 0 : i) + 1) % 3];
     applyTheme();
     fillSettings();
     save();
+    toast('主题：' + (state.settings.theme === 'system' ? '跟随系统' : state.settings.theme === 'light' ? '浅色' : '深色'), '', 1500);
   });
 
   $('#btnSaveSettings').addEventListener('click', function () {
@@ -1268,7 +1382,10 @@
     // 界面按秒/MB 输入，存回毫秒/字节
     state.settings.latencyTimeout = clamp(Math.round((parseFloat($('#setTimeout').value) || 6) * 1000), 1000, 30000);
     state.settings.speedBytes = clamp(Math.round((parseFloat($('#setSpeedBytes').value) || 5) * 1000000), 1000000, 50000000);
+    var siSet = $('#setSyncInterval');
+    if (siSet) state.settings.syncInterval = Number(siSet.value) || 0;
     save();
+    startSyncTimer();
     toast('设置已保存', 'ok');
     closeSheets();
   });
@@ -1298,6 +1415,7 @@
     }
     fillSettings();
     renderSources();
+    startSyncTimer();
 
     await refreshStatus();
     setInterval(refreshStatus, 5000);

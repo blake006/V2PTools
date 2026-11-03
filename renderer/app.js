@@ -14,6 +14,7 @@ const state = {
     speedSource: 'cloudflare',
     deepHealth: true,
     autoSyncOnStart: false,
+    syncInterval: 0,
     latencyUrls: [],
     ipUrls: [],
     plainType: 'socks5',
@@ -119,11 +120,29 @@ function setStatus(text) {
   if (el) el.textContent = text;
 }
 
+/** 把 dark / light / system 解析成实际要用的主题 */
+function resolveTheme(theme) {
+  if (theme === 'light' || theme === 'dark') return theme;
+  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return dark ? 'dark' : 'light';
+}
+
 function applyTheme(theme) {
-  const t = theme === 'light' ? 'light' : 'dark';
-  state.settings.theme = t;
+  const pref = theme === 'light' || theme === 'system' ? theme : 'dark';
+  state.settings.theme = pref;
+  const t = resolveTheme(pref);
   document.documentElement.dataset.theme = t;
   if (window.api.setTheme) window.api.setTheme(t);
+}
+
+// 跟随系统时，系统切换深浅色要跟着变
+if (window.matchMedia) {
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  const onSysTheme = () => {
+    if (state.settings.theme === 'system') applyTheme('system');
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onSysTheme);
+  else if (mq.addListener) mq.addListener(onSysTheme);
 }
 
 function saveNodes() {
@@ -950,6 +969,22 @@ function mergeFromSource(src, incoming, removeGone) {
   return window.IPHMerge.mergeFromSource(state, src, incoming, removeGone);
 }
 
+/** 定时更新订阅：设置里选小时数，到点自动同步（正在同步/检测时跳过本轮） */
+let syncTimer = null;
+function startSyncTimer() {
+  if (syncTimer) {
+    clearInterval(syncTimer);
+    syncTimer = null;
+  }
+  const mins = Number(state.settings.syncInterval) || 0;
+  if (!mins) return;
+  const period = Math.max(5, mins) * 60 * 1000;
+  syncTimer = setInterval(() => {
+    if (!state.sources.length || state.syncing) return;
+    syncSources(state.sources.slice());
+  }, period);
+}
+
 async function syncSources(list) {
   if (state.syncing) return toast('正在更新中，请稍候', 'err');
   if (state.running) toast('检测进行中，更新订阅会与检测抢带宽，测速结果可能偏低', 'warn', 4000);
@@ -1271,6 +1306,34 @@ function handleTestEvent(ev) {
 /* 详情抽屉                                                            */
 /* ------------------------------------------------------------------ */
 
+/** 迷你折线图：判断节点是「一直这么慢」还是「这次抽风」 */
+function sparkline(values, opts) {
+  const w = (opts && opts.w) || 300;
+  const h = (opts && opts.h) || 56;
+  const pad = 5;
+  const pts = (values || []).filter((v) => v != null);
+  if (pts.length < 2) {
+    return '<div class="dim" style="font-size:12px;padding:6px 0">检测 2 次以上后显示趋势</div>';
+  }
+  const min = Math.min.apply(null, pts);
+  const max = Math.max.apply(null, pts);
+  const span = Math.max(1, max - min);
+  const stepX = (w - pad * 2) / Math.max(1, values.length - 1);
+  const coords = values
+    .map((v, i) => {
+      if (v == null) return null;
+      const x = pad + i * stepX;
+      const y = pad + (1 - (v - min) / span) * (h - pad * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .filter(Boolean)
+    .join(' ');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <polyline points="${coords}" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" />
+    </svg>
+    <div class="spark-legend"><span>最低 ${Math.round(min)} ms</span><span>最高 ${Math.round(max)} ms</span><span>共 ${pts.length} 次</span></div>`;
+}
+
 function openDrawer(id) {
   const n = state.nodes.find((x) => x.id === id);
   if (!n) return;
@@ -1303,6 +1366,7 @@ function openDrawer(id) {
       </button>
     </div>
     ${reasonPills ? `<div class="section-title">健康度依据</div><div class="pill-row">${reasonPills}</div>` : ''}
+    ${n.history && n.history.length > 1 ? `<div class="section-title">延迟趋势（最近 ${n.history.length} 次）</div>${sparkline(n.history.map((h) => h.latency))}` : ''}
     <div class="section-title">检测结果</div>
     <div>
       ${kv('健康度', n.health != null ? `<b style="color:${healthColor(n.health)}">${n.health} · ${healthText(n.health)}</b>` : '—')}
@@ -1784,6 +1848,9 @@ async function init() {
   if (state.settings.autoSyncOnStart && state.sources.length) {
     setTimeout(() => syncSources(state.sources.slice()), 900);
   }
+
+  // 定时更新订阅（0 = 关闭）
+  startSyncTimer();
 }
 
 /* ------------------------------------------------------------------ */
@@ -2070,6 +2137,7 @@ function openSourcesModal() {
   renderSources();
   $('#syncRemoveGone').checked = state.settings.syncRemoveGone !== false;
   $('#autoSyncOnStart').checked = !!state.settings.autoSyncOnStart;
+  $('#syncInterval').value = String(state.settings.syncInterval || 0);
   openModal('sourcesModal');
 }
 
@@ -2120,6 +2188,13 @@ $('#autoSyncOnStart').addEventListener('change', (e) => {
   window.api.setStore('settings', state.settings);
 });
 
+$('#syncInterval').addEventListener('change', (e) => {
+  state.settings.syncInterval = Number(e.target.value) || 0;
+  window.api.setStore('settings', state.settings);
+  startSyncTimer();
+  toast(state.settings.syncInterval ? '已开启定时更新订阅' : '已关闭定时更新', 'ok');
+});
+
 $('#btnSettings').addEventListener('click', () => {
   fillSettings();
   openModal('settingsModal');
@@ -2127,8 +2202,13 @@ $('#btnSettings').addEventListener('click', () => {
 $('#btnSaveSettings').addEventListener('click', saveSettings);
 
 $('#btnTheme').addEventListener('click', async () => {
-  applyTheme(state.settings.theme === 'light' ? 'dark' : 'light');
+  // 三态循环：深色 → 浅色 → 跟随系统
+  const order = ['dark', 'light', 'system'];
+  const cur = order.includes(state.settings.theme) ? state.settings.theme : 'dark';
+  const next = order[(order.indexOf(cur) + 1) % order.length];
+  applyTheme(next);
   await window.api.setStore('settings', state.settings);
+  toast(next === 'system' ? '主题：跟随系统' : next === 'light' ? '主题：浅色' : '主题：深色', 'ok', 2000);
 });
 
 $('#btnExport').addEventListener('click', async () => {
@@ -2151,6 +2231,38 @@ $('#btnExport').addEventListener('click', async () => {
     return;
   }
 
+  if (format === 'singbox') {
+    const testedSb = sortedNodes().filter((n) => n.status !== 'idle');
+    const listSb = testedSb.length ? testedSb : sortedNodes();
+    if (!listSb.length) return toast('当前没有可导出的节点', 'err');
+    const r = await window.api.exportSingBox({
+      nodes: listSb,
+      defaultName: 'v2ptools-singbox-' + new Date().toISOString().slice(0, 10),
+    });
+    if (r && r.ok) {
+      const skipNote = r.skipped && r.skipped.length ? `（${r.skipped.join('/')} 暂不支持，已跳过）` : '';
+      toast(`已导出 ${r.count} 个节点 → ${r.path}${skipNote}`, 'ok', 5000);
+    } else if (r && !r.canceled) {
+      toast('导出失败：' + (r.error || '未知原因'), 'err');
+    }
+    return;
+  }
+
+  if (format === 'v2rayn') {
+    const testedVn = sortedNodes().filter((n) => n.status !== 'idle');
+    const listVn = testedVn.length ? testedVn : sortedNodes();
+    if (!listVn.length) return toast('当前没有可导出的节点', 'err');
+    const lines = listVn.map((n) => (window.IPHShare ? window.IPHShare.toShareLink(n) : '')).filter(Boolean);
+    if (!lines.length) return toast('这些节点类型暂不支持生成分享链接', 'err');
+    const r = await window.api.exportFile({
+      format: 'txt',
+      content: lines.join('\n'),
+      defaultName: 'v2ptools-v2rayn-' + new Date().toISOString().slice(0, 10),
+    });
+    if (r && r.ok) toast(`已导出 ${lines.length} 条链接 → ${r.path}`, 'ok');
+    return;
+  }
+
   const content = buildExport(format);
   const r = await window.api.exportFile({
     format,
@@ -2170,6 +2282,8 @@ function chooseExportFormat() {
         <div class="modal-head"><div class="modal-title">导出检测结果</div></div>
         <div class="modal-body" style="gap:8px">
           <button class="btn" data-fmt="clash" style="justify-content:flex-start">Clash 配置（YAML，可直接给内核用）</button>
+          <button class="btn" data-fmt="singbox" style="justify-content:flex-start">sing-box 配置（JSON）</button>
+          <button class="btn" data-fmt="v2rayn" style="justify-content:flex-start">v2rayN / v2rayNG 链接（TXT）</button>
           <button class="btn" data-fmt="csv" style="justify-content:flex-start">CSV 表格（Excel 可直接打开）</button>
           <button class="btn" data-fmt="json" style="justify-content:flex-start">JSON（含完整字段）</button>
           <button class="btn" data-fmt="txt" style="justify-content:flex-start">原始链接（TXT）</button>
@@ -2325,6 +2439,34 @@ async function showShareLink(n) {
   toast('已复制到剪贴板', 'ok');
 }
 
+/** 节点二维码：把分享链接画出来，手机扫一下就能导入 */
+async function showNodeQr(n) {
+  const link = window.IPHShare ? window.IPHShare.toShareLink(n) : '';
+  if (!link) return toast(`${TYPE_LABEL[n.type] || n.type} 暂不支持生成链接，无法画二维码`, 'err', 4000);
+
+  const r = await window.api.qrMake(link);
+  if (!r || !r.ok) return toast('生成二维码失败：' + ((r && r.error) || '未知原因'), 'err');
+
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask open';
+  mask.style.zIndex = 240;
+  mask.innerHTML = `
+    <div class="modal" style="width:380px">
+      <div class="modal-head"><div class="modal-title">扫码导入 · ${esc(n.name || n.server)}</div></div>
+      <div class="modal-body" style="align-items:center;gap:12px">
+        <img src="${r.dataUrl}" alt="节点二维码" style="width:280px;height:280px;border-radius:10px;background:#fff;padding:8px" />
+        <div class="dim" style="font-size:11.5px;line-height:1.5;text-align:center;word-break:break-all;max-height:48px;overflow:hidden">
+          ${esc(link.slice(0, 96))}${link.length > 96 ? '…' : ''}
+        </div>
+        <button class="btn btn-primary" data-close-qr style="width:100%">关闭</button>
+      </div>
+    </div>`;
+  mask.addEventListener('click', (e) => {
+    if (e.target === mask || e.target.closest('[data-close-qr]')) mask.remove();
+  });
+  document.body.appendChild(mask);
+}
+
 function openNodeMenu(id, x, y) {
   const n = state.nodes.find((it) => it.id === id);
   if (!n) return;
@@ -2385,6 +2527,10 @@ function openNodeMenu(id, x, y) {
           $('#filterPanel').classList.remove('open');
           $('#moveGroupPanel').classList.add('open');
         },
+      },
+      {
+        label: '显示二维码（手机扫码导入）',
+        onClick: () => showNodeQr(n),
       },
       '-',
       {

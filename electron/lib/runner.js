@@ -278,6 +278,10 @@ class Runner {
             dnsbl: d ? d.listed : null,
             health: n.status === 'ok' ? score : null,
             healthReasons: reasons || [],
+            // 留最近 20 次结果：判断节点是「一直这么慢」还是「这次抽风」
+            history: (Array.isArray(n.history) ? n.history : [])
+              .concat([{ t: Date.now(), latency: n.latency ?? null, speed: n.speed ?? null, health: n.status === 'ok' ? score : null }])
+              .slice(-20),
           };
           Object.assign(n, patch);
           this.emit({ type: 'node', id: n.id, patch, finished, total, silent: true });

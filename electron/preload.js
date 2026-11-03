@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
 
   exportFile: (payload) => ipcRenderer.invoke('export:save', payload),
   exportClash: (payload) => ipcRenderer.invoke('export:clash', payload),
+  exportSingBox: (payload) => ipcRenderer.invoke('export:singbox', payload),
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
   openExternal: (url) => ipcRenderer.invoke('shell:open', url),
   openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
@@ -26,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
   proxyEnable: (nodeId, mode) => ipcRenderer.invoke('proxy:enable', nodeId, mode),
   tunCheck: () => ipcRenderer.invoke('proxy:tun-check'),
   trafficToggle: () => ipcRenderer.invoke('traffic:toggle'),
+  qrMake: (text) => ipcRenderer.invoke('qr:make', text),
   relaunchElevated: () => ipcRenderer.invoke('app:relaunch-elevated'),
   proxyDisable: () => ipcRenderer.invoke('proxy:disable'),
   proxyCheck: () => ipcRenderer.invoke('proxy:check'),

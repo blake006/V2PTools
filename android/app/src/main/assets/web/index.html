@@ -161,6 +161,7 @@
       <div class="group-title">导出</div>
       <div class="row2">
         <button class="btn" data-export="clash">Clash 配置</button>
+        <button class="btn" data-export="singbox">sing-box 配置</button>
         <button class="btn" data-export="csv">CSV</button>
         <button class="btn" data-export="json">JSON</button>
         <button class="btn" data-export="txt">原始链接</button>
@@ -172,6 +173,14 @@
       <label class="field"><span>并发数</span><input id="setConcurrency" type="number" min="1" max="32" /></label>
       <label class="field"><span>延迟超时（秒）</span><input id="setTimeout" type="number" min="1" max="30" step="0.5" /></label>
       <label class="field"><span>测速大小（MB）</span><input id="setSpeedBytes" type="number" min="1" max="50" step="1" /></label>
+      <label class="field"><span>定时更新订阅</span><select id="setSyncInterval">
+        <option value="0">关闭</option>
+        <option value="60">每 1 小时</option>
+        <option value="180">每 3 小时</option>
+        <option value="360">每 6 小时</option>
+        <option value="720">每 12 小时</option>
+        <option value="1440">每天</option>
+      </select></label>
       <button class="btn full" id="btnTheme">切换浅色</button>
       <button class="btn full" id="btnSaveSettings">保存设置</button>
     </div>
