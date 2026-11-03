@@ -33,6 +33,7 @@ const state = {
     maxLatency: null,
     minSpeed: null,
     dnsblOnly: false,
+    dnsblClean: false,
   },
   sidebarHidden: false,
   query: '',
@@ -211,12 +212,14 @@ function renderActiveFilters() {
   if (f.maxLatency != null) nums.push(`延迟 ≤ ${f.maxLatency}ms`);
   if (f.minSpeed != null) nums.push(`速度 ≥ ${f.minSpeed}Mbps`);
   if (f.dnsblOnly) nums.push('命中黑名单');
+  if (f.dnsblClean) nums.push('未命中黑名单');
   if (nums.length) {
     add(nums.join('，'), () => {
       state.filters.minHealth = null;
       state.filters.maxLatency = null;
       state.filters.minSpeed = null;
       state.filters.dnsblOnly = false;
+      state.filters.dnsblClean = false;
       syncFilterPanel();
       applyFilters();
     });
@@ -260,6 +263,7 @@ function resetFilters() {
     maxLatency: null,
     minSpeed: null,
     dnsblOnly: false,
+    dnsblClean: false,
   };
   state.query = '';
   const si = $('#searchInput');
@@ -793,6 +797,7 @@ function syncFilterPanel() {
   $('#fSpeedVal').textContent = f.minSpeed == null ? '不限' : `≥ ${f.minSpeed}`;
   $$('#fIpTypes .chip').forEach((c) => c.classList.toggle('active', f.ipTypes.includes(c.dataset.iptype)));
   $('#fDnsbl').checked = !!f.dnsblOnly;
+  $('#fDnsblClean').checked = !!f.dnsblClean;
 }
 
 function bindFilterPanel() {
@@ -822,6 +827,18 @@ function bindFilterPanel() {
   });
   $('#fDnsbl').addEventListener('change', (e) => {
     state.filters.dnsblOnly = e.target.checked;
+    if (e.target.checked) {
+      state.filters.dnsblClean = false;
+      $('#fDnsblClean').checked = false;
+    }
+    applyFilters();
+  });
+  $('#fDnsblClean').addEventListener('change', (e) => {
+    state.filters.dnsblClean = e.target.checked;
+    if (e.target.checked) {
+      state.filters.dnsblOnly = false;
+      $('#fDnsbl').checked = false;
+    }
     applyFilters();
   });
   $('#btnResetFilter').addEventListener('click', resetFilters);
@@ -1209,7 +1226,11 @@ function openDrawer(id) {
   if (n.proxyFlag) pills.push('<span class="pill warn">代理特征</span>');
   if (n.hostingFlag) pills.push('<span class="pill warn">机房 IP</span>');
   if (n.mobileFlag) pills.push('<span class="pill ok">移动网络</span>');
-  if (n.ipType) pills.push(`<span class="pill">${esc(n.ipType)}</span>`);
+  if (n.ipType) {
+    const why = (n.ipTypeReasons || []).join('；');
+    const conf = n.ipTypeConfidence ? `（置信度 ${n.ipTypeConfidence}%）` : '';
+    pills.push(`<span class="pill" title="${esc(why + conf)}">${esc(n.ipType)}</span>`);
+  }
   if (n.dnsbl && n.dnsbl.length) pills.push(`<span class="pill bad">黑名单: ${esc(n.dnsbl.join('/'))}</span>`);
   else if (n.dnsbl && n.dnsbl.length === 0) pills.push('<span class="pill ok">未命中黑名单</span>');
 

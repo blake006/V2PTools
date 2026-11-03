@@ -206,7 +206,8 @@
 
     list = list.filter(function (n) {
       if (f.status && f.status !== 'all' && n.status !== f.status) return false;
-      if (f.dnsbl && n.dnsbl === 'listed') return false;
+      // 只看未命中：没查过的也不算（否则等于没筛）
+      if (f.dnsbl && n.dnsbl !== 'clean') return false;
       if (!q) return true;
       var hay = [n.name, n.server, n.country, n.city, n.isp, n.type].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;

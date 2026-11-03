@@ -177,16 +177,209 @@ function ipTypeLabel(geo) {
   return '普通 IP';
 }
 
+/* ------------------------------------------------------------------ */
+/* IP 类型判定：ASN 名单 + PTR 反查 + 数据源标记，三路信号加权          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 常见云厂商 / 机房 ASN。
+ * ip-api 的 hosting 字段对很多小机房会漏判，ASN 是更硬的证据。
+ */
+const CLOUD_ASN = new Set([
+  '16509', '14618', '8987', // AWS
+  '13335', // Cloudflare
+  '15169', '396982', // Google / GCP
+  '8075', '8068', // Azure
+  '14061', // DigitalOcean
+  '63949', '48337', // Linode / Akamai
+  '20473', '64515', // Vultr / Choopa
+  '16276', // OVH
+  '24940', '213230', // Hetzner
+  '45102', '37963', // 阿里云
+  '132203', '45090', // 腾讯云
+  '136907', '55990', // 华为云
+  '31898', '14413', // Oracle Cloud
+  '51167', '24961', // Contabo
+  '12876', // Scaleway
+  '202053', // UpCloud
+  '53667', // BuyVM / FranTech
+  '36352', // RackNerd / ColoCrossing
+  '40676', // Psychz
+  '62240', // Clouvider
+  '9009', // M247
+  '60068', // Datacamp
+  '209854', // 一些小型 VPS 商
+]);
+
+/** ASN 名称里的机房关键字（ip-api 会返回 asname / as 文本） */
+const CLOUD_ASNAME = /hosting|cloud|datacenter|data center|server|vps|colo|dedicated|compute|cdn/i;
+/** ASN 名称里的住宅/运营商关键字 */
+const RESI_ASNAME = /broadband|telecom|communications|unicom|mobile|wireless|cellular|telefonica|orange|vodafone|comcast|verizon|at&t|charter|cox|centurylink|frontier|bt group|sky|virgin|kddi|softbank|ntt|hinet|chinanet|cmnet|ctc/i;
+
+/** 机房 PTR 特征 */
+const CLOUD_PTR = [
+  /amazonaws\.com/i, /vultr/i, /digitalocean/i, /linode/i, /ovh\./i, /hetzner/i,
+  /contabo/i, /colocrossing/i, /psychz/i, /choopa/i, /leaseweb/i, /googleusercontent/i,
+  /cloudfront/i, /akamai/i, /azure/i, /aliyun/i, /alibaba/i, /tencent/i, /huawei/i,
+  /oraclecloud/i, /scaleway/i, /upcloud/i, /racknerd/i, /hosthatch/i, /bandwagonhost/i,
+  /m247/i, /datacamp/i, /vps/i, /dedicated/i, /server/i, /hosting/i, /colo/i, /cloud/i,
+];
+/** 住宅 / 动态拨号 PTR 特征 */
+const RESI_PTR = [
+  /dynamic/i, /ppp/i, /dsl/i, /broadband/i, /cable/i, /pool/i, /dhcp/i,
+  /hinet-ip/i, /bbtec/i, /ocn\.ne\.jp/i, /bigpond/i, /comcast/i, /verizon/i,
+  /charter/i, /cox\.net/i, /163data/i, /ctm/i, /static.*res/i,
+];
+/** 住宅 ISP 名称特征 */
+const RESI_ISP = [
+  /电信/, /联通/, /移动/, /广电/, /铁通/, /chinanet/i, /unicom/i, /cmnet/i,
+  /comcast/i, /verizon/i, /at&t/i, /charter/i, /cox/i, /centurylink/i, /frontier/i,
+  /bt\./i, /sky broadband/i, /virgin media/i, /deutsche telekom/i, /orange/i,
+  /vodafone/i, /telstra/i, /optus/i, /ntt/i, /kddi/i, /softbank/i, /hinet/i,
+];
+/** 移动网络特征 */
+const MOBILE_ISP = [/mobile/i, /wireless/i, /cellular/i, /\b4g\b/i, /\b5g\b/i, /\blte\b/i, /移动.*(数据|网络)/];
+
+/**
+ * 批量反查 PTR（并发受限）。
+ * 住宅 IP 常有 dynamic/ppp/dsl 之类的动态域名，机房则多是 *amazonaws.com 这类。
+ */
+function lookupPtr(ips, concurrency = 8, timeout = 2500) {
+  const out = new Map();
+  const valid = (ip) => {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || ''));
+    return !!m && m.slice(1).every((x) => Number(x) <= 255);
+  };
+  const list = [...new Set(ips.filter(valid))];
+  let cursor = 0;
+
+  const worker = () =>
+    new Promise((resolve) => {
+      const step = () => {
+        if (cursor >= list.length) return resolve();
+        const ip = list[cursor];
+        cursor += 1;
+        let done = false;
+        const timer = setTimeout(() => {
+          if (done) return;
+          done = true;
+          out.set(ip, '');
+          step();
+        }, timeout);
+        const finish = (name) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          out.set(ip, name || '');
+          step();
+        };
+        try {
+          dns.reverse(ip, (err, names) => finish(!err && names && names.length ? String(names[0]) : ''));
+        } catch (e) {
+          // 非法地址（如 999.1.1.1）会同步抛 EINVAL，别让整个批次挂掉
+          finish('');
+        }
+      };
+      step();
+    });
+
+  return Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker)).then(() => out);
+}
+
+/**
+ * 综合判定 IP 类型。
+ * 三路信号加权：ASN 名单/名称、PTR 反查、数据源标记（hosting/proxy/mobile）。
+ * 宁可判「未知」也不要把机房 IP 说成住宅——用户拿这个筛住宅代理，误判代价更高。
+ */
+function classifyIpType(geo, ptr) {
+  if (!geo) return { key: 'unknown', label: '未知', confidence: 0, reasons: [] };
+
+  const reasons = [];
+  let score = 0;
+
+  const asn = String(geo.asn || '').replace(/[^0-9]/g, '');
+  const asText = `${geo.asText || ''} ${geo.org || ''}`;
+
+  if (asn && CLOUD_ASN.has(asn)) {
+    score -= 5;
+    reasons.push(`AS${asn} 属云/机房`);
+  }
+  if (asText && CLOUD_ASNAME.test(asText)) {
+    score -= 3;
+    reasons.push('ASN 名称含机房关键词');
+  }
+  if (asText && RESI_ASNAME.test(asText)) {
+    score += 2;
+    reasons.push('ASN 名称像运营商');
+  }
+  if (geo.hosting) {
+    score -= 3;
+    reasons.push('数据源标记为机房');
+  }
+  if (geo.proxy) {
+    score -= 2;
+    reasons.push('数据源标记为代理');
+  }
+  if (geo.mobile) {
+    score += 2;
+    reasons.push('数据源标记为移动网络');
+  }
+
+  if (ptr) {
+    if (CLOUD_PTR.some((r) => r.test(ptr))) {
+      score -= 4;
+      reasons.push(`PTR「${ptr}」像机房`);
+    } else if (RESI_PTR.some((r) => r.test(ptr))) {
+      score += 4;
+      reasons.push(`PTR「${ptr}」像动态宽带`);
+    }
+  } else {
+    reasons.push('无 PTR 记录');
+  }
+
+  if (RESI_ISP.some((r) => r.test(geo.isp || ''))) {
+    score += 3;
+    reasons.push(`ISP「${geo.isp}」像家庭宽带`);
+  }
+
+  const isMobile = geo.mobile || MOBILE_ISP.some((r) => r.test(geo.isp || ''));
+  if (isMobile && score > -3) {
+    return { key: 'mobile', label: '移动网络', confidence: Math.min(95, 55 + score * 6), reasons };
+  }
+  if (score <= -3) {
+    return { key: 'hosting', label: '机房 IDC', confidence: Math.min(95, 55 + -score * 6), reasons };
+  }
+  if (score >= 3) {
+    return { key: 'residential', label: '住宅宽带', confidence: Math.min(95, 55 + score * 6), reasons };
+  }
+  // 证据不足时，代理标记优先于「普通 IP」
+  if (geo.proxy) return { key: 'proxy', label: '代理/VPN', confidence: 45, reasons };
+  return { key: 'unknown', label: '普通 IP', confidence: 30, reasons };
+}
+
 /**
  * 健康度评分 0-100
  * 维度：代理特征 / 机房特征 / 黑名单 / 延迟 / 速度
  */
-function scoreHealth({ geo, dnsbl, latency, speed }) {
+function scoreHealth({ geo, dnsbl, latency, speed, ipTypeKey }) {
   let score = 100;
   const reasons = [];
 
   if (geo) {
-    if (geo.proxy && geo.hosting) {
+    // 优先用分类结论（ASN 名单 + PTR），比只看 hosting 字段准
+    if (ipTypeKey === 'hosting') {
+      score -= 22;
+      reasons.push('机房/IDC IP');
+    } else if (ipTypeKey === 'proxy') {
+      score -= 32;
+      reasons.push('代理/VPN 特征');
+    } else if (ipTypeKey === 'residential') {
+      score += 4;
+      reasons.push('住宅宽带出口');
+    } else if (ipTypeKey === 'mobile') {
+      score += 2;
+      reasons.push('移动网络出口');
+    } else if (geo.proxy && geo.hosting) {
       score -= 45;
       reasons.push('检测为代理且为机房 IP');
     } else if (geo.proxy) {
@@ -195,10 +388,6 @@ function scoreHealth({ geo, dnsbl, latency, speed }) {
     } else if (geo.hosting) {
       score -= 22;
       reasons.push('机房/IDC IP');
-    }
-    if (geo.mobile) {
-      score += 2;
-      reasons.push('移动网络出口');
     }
   } else {
     score -= 10;
@@ -235,4 +424,14 @@ function healthLevel(score) {
   return { key: 'bad', text: '较差' };
 }
 
-module.exports = { lookupBatch, checkDnsbl, ipTypeLabel, scoreHealth, healthLevel, DNSBL_ZONES };
+module.exports = {
+  lookupBatch,
+  lookupPtr,
+  classifyIpType,
+  checkDnsbl,
+  ipTypeLabel,
+  scoreHealth,
+  healthLevel,
+  DNSBL_ZONES,
+  CLOUD_ASN,
+};

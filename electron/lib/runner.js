@@ -234,6 +234,8 @@ class Runner {
         this.emit({ type: 'phase', phase: 'geo', count: chunk.length });
         const okNodes = chunk.filter((n) => n.ip);
         const ipMap = await geo.lookupBatch(okNodes.map((n) => n.ip));
+        // PTR 反查与归属地并行：住宅 IP 多是 dynamic/ppp 域名，机房多是 *amazonaws.com
+        const ptrMap = await geo.lookupPtr(okNodes.map((n) => n.ip), 8);
 
         const dnsblMap = new Map();
         if (deep) {
@@ -251,8 +253,10 @@ class Runner {
         for (const n of chunk) {
           const g = ipMap.get(n.ip) || null;
           const d = dnsblMap.get(n.id) || null;
+          const t = g ? geo.classifyIpType(g, ptrMap.get(n.ip) || '') : null;
           const { score, reasons } = geo.scoreHealth({
             geo: g,
+            ipTypeKey: t ? t.key : '',
             dnsbl: d,
             latency: n.latency,
             speed: n.speed,
@@ -264,7 +268,10 @@ class Runner {
             city: g ? g.city : '',
             isp: g ? g.isp : '',
             asn: g ? g.asn : '',
-            ipType: g ? geo.ipTypeLabel(g) : n.ip ? '未知' : '',
+            ipType: t ? t.label : n.ip ? '未知' : '',
+            ipTypeKey: t ? t.key : 'unknown',
+            ipTypeConfidence: t ? t.confidence : 0,
+            ipTypeReasons: t ? t.reasons : [],
             proxyFlag: g ? g.proxy : null,
             hostingFlag: g ? g.hosting : null,
             mobileFlag: g ? g.mobile : null,
