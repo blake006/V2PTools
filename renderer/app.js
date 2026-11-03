@@ -2152,4 +2152,97 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+/* ------------------------------------------------------------------ */
+/* 节点右键菜单                                                        */
+/* ------------------------------------------------------------------ */
+
+/** 复制分享链接：能生成就复制，不能生成时说明原因 */
+async function copyShareLink(n) {
+  const link = window.IPHShare ? window.IPHShare.toShareLink(n) : '';
+  if (!link) {
+    toast(`${TYPE_LABEL[n.type] || n.type} 暂不支持生成链接，可用「导出原始链接」`, 'err', 4000);
+    return;
+  }
+  await window.api.copyText(link);
+  toast('分享链接已复制', 'ok');
+}
+
+/** 分享节点：把链接摊开给人看（可全选复制），适合贴到聊天窗口 */
+async function showShareLink(n) {
+  const link = window.IPHShare ? window.IPHShare.toShareLink(n) : '';
+  if (!link) {
+    toast(`${TYPE_LABEL[n.type] || n.type} 暂不支持生成链接`, 'err', 4000);
+    return;
+  }
+  await askText('分享节点链接（可全选复制）', link, '');
+  await window.api.copyText(link);
+  toast('已复制到剪贴板', 'ok');
+}
+
+function openNodeMenu(id, x, y) {
+  const n = state.nodes.find((it) => it.id === id);
+  if (!n) return;
+  const link = window.IPHShare ? window.IPHShare.toShareLink(n) : '';
+  showContextMenu(
+    [
+      { label: '节点详情', onClick: () => openDrawer(id) },
+      { label: link ? '复制分享链接' : '复制分享链接（该协议暂不支持）', onClick: () => copyShareLink(n) },
+      { label: '分享节点（查看链接）…', onClick: () => showShareLink(n) },
+      { label: n.ip ? `复制出口 IP（${n.ip}）` : '复制出口 IP（未检测）', onClick: () => (n.ip ? window.api.copyText(n.ip).then(() => toast('已复制 ' + n.ip, 'ok')) : toast('还没有出口 IP，先检测一次', 'err')) },
+      '-',
+      {
+        label: '仅检测此节点',
+        onClick: () => {
+          if (state.running) return toast('已有检测任务在进行', 'err');
+          state.selected.clear();
+          state.selected.add(id);
+          runTest('full', true);
+        },
+      },
+      {
+        label: '重命名…',
+        onClick: async () => {
+          const name = await askText('重命名节点', n.name || '', '输入新的节点名');
+          if (!name) return;
+          n.name = name;
+          saveNodes();
+          renderTable();
+          toast('已重命名', 'ok');
+        },
+      },
+      {
+        label: '移动到分组…',
+        onClick: () => {
+          state.selected.clear();
+          state.selected.add(id);
+          renderMoveGroupPanel();
+          $('#filterPanel').classList.remove('open');
+          $('#moveGroupPanel').classList.add('open');
+        },
+      },
+      '-',
+      {
+        label: '删除节点',
+        danger: true,
+        onClick: () => {
+          state.nodes = state.nodes.filter((it) => it.id !== id);
+          state.selected.delete(id);
+          saveNodes();
+          renderTable();
+          toast('已删除节点', 'ok');
+        },
+      },
+    ],
+    x,
+    y
+  );
+}
+
+$('#tbody').addEventListener('contextmenu', (e) => {
+  const tr = e.target.closest('tr[data-id]');
+  if (!tr) return;
+  e.preventDefault();
+  openNodeMenu(tr.dataset.id, e.clientX, e.clientY);
+});
+
 init();
