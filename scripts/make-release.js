@@ -15,7 +15,7 @@ const path = require('path');
 
 const TOKEN = process.env.GH_TOKEN;
 const REPO = 'blake006/V2PTools';
-const TAG = 'v1.0.10';
+const TAG = 'v1.1.0';
 const ROOT = path.join(__dirname, '..');
 const API = `https://api.github.com/repos/${REPO}`;
 
@@ -134,8 +134,8 @@ async function uploadAsset(releaseId, file) {
 
 (async () => {
   const assets = [
-    path.join(ROOT, 'dist', 'V2PTools-1.0.10-win-x64-portable.exe'),
-    path.join(ROOT, 'dist', 'V2PTools-1.0.10-win-x64.zip'),
+    path.join(ROOT, 'dist', 'V2PTools-1.1.0-win-x64-portable.exe'),
+    path.join(ROOT, 'dist', 'V2PTools-1.1.0-win-x64.zip'),
     path.join(ROOT, 'dist', 'V2PTools-android-1.0.9-debug.apk'),
   ];
 
