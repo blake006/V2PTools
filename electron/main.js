@@ -12,6 +12,7 @@ const clash = require('./lib/clash');
 const { SystemProxy, DEFAULT_BYPASS } = require('./lib/sysproxy');
 const { Gateway, DEFAULT_PORT, ROUTE_MODES } = require('./lib/gateway');
 const { fetchExitIP, requestThrough } = require('./lib/tester');
+const { detectConflicts } = require('./lib/netcheck');
 const { deriveProxyState, pickRouteMode, STATE_TEXT } = require('./lib/proxyState');
 
 const isDev = process.argv.includes('--dev');
@@ -284,7 +285,10 @@ async function enableSystemProxy(nodeId) {
   }
 
   sendProxyState();
-  return proxyStatus();
+  // 顺带报一下环境冲突：机器上还开着别的代理软件时，系统代理会被它们抢走或绕过
+  const conflicts = await detectConflicts().catch(() => null);
+  const st = await proxyStatus();
+  return { ...st, conflicts };
 }
 
 /** 关闭系统代理：先还原系统设置，再停内核（避免流量打到已关闭的端口） */
@@ -777,7 +781,7 @@ ipcMain.handle('proxy:check', async () => {
   const gw = gateway ? gateway.status() : { running: false, port: 0, node: null };
   const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
 
-  const [direct, via, https] = await Promise.all([
+  const [direct, via, https, conflicts] = await Promise.all([
     fetchExitIP(0, { timeout: 8000 }).catch((e) => ({ ok: false, error: e.message })),
     gw.running
       ? fetchExitIP(gw.port, { timeout: 12000 }).catch((e) => ({ ok: false, error: e.message }))
@@ -789,6 +793,7 @@ ipcMain.handle('proxy:check', async () => {
           .then((r) => ({ ok: r.ok && r.status < 400, status: r.status, ms: r.ms, error: r.error }))
           .catch((e) => ({ ok: false, error: e.message }))
       : Promise.resolve({ ok: false, error: '内核未运行' }),
+    detectConflicts().catch(() => null),
   ]);
 
   return {
@@ -797,6 +802,7 @@ ipcMain.handle('proxy:check', async () => {
     direct,
     via,
     https,
+    conflicts,
     same: !!(via && via.ok && direct && direct.ok && via.ip === direct.ip),
   };
 });

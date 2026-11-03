@@ -1532,6 +1532,10 @@ async function enableSystemProxyById(id) {
     renderProxyState(st);
     toast(`系统代理已开启 → 127.0.0.1:${st.gateway.port}`, 'ok');
     setStatus(`系统代理已开启，出口节点：${n.name || n.server}`);
+    // 机器上还开着别的代理软件时，系统代理可能被它们抢走或用 TUN 绕过 —— 直接说出来
+    if (st.conflicts && st.conflicts.hasConflict) {
+      toast('注意：' + st.conflicts.summary + '。它们可能抢走系统代理，建议先退出', 'warn', 8000);
+    }
     // 后台校验真实出口 IP
     window.api.proxyProbe().then((r) => {
       if (r && r.ok) toast(`链路可用，出口 IP ${r.ip}`, 'ok');
@@ -1896,6 +1900,11 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   if (r.via && r.via.ok && r.https && !r.https.ok) {
     lines.push('');
     lines.push('HTTP 通但 HTTPS 不通：多半是浏览器没走系统代理（扩展 / QUIC），或节点屏蔽了该站点');
+  }
+  if (r.conflicts && r.conflicts.hasConflict) {
+    lines.push('');
+    lines.push('⚠ 环境冲突：' + r.conflicts.summary);
+    lines.push('这些软件会抢系统代理、或用 TUN 直接接管流量，建议先退出它们再试');
   }
   if (r.gateway.node) lines.push(`\n节点：${r.gateway.node.name}（${r.gateway.node.server}:${r.gateway.node.port}）`);
   alert(lines.join('\n'));
