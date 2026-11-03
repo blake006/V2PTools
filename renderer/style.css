@@ -687,3 +687,10 @@ tr.in-use .row-act { opacity: 1; }
 #proxyMenu button span { display: block; font-size: 11px; color: var(--text-faint); margin-top: 2px; }
 #proxyMenu button.active { background: var(--accent-soft); }
 #proxyMenu button.active b { color: var(--accent); }
+
+/* 收藏标记 */
+.fav-star { color: #f5a623; font-size: 12px; line-height: 1; flex: 0 0 auto; }
+.pill.note {
+  background: var(--bg-hover); color: var(--text-dim);
+  max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

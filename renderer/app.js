@@ -302,6 +302,11 @@ function sortedNodes() {
   const { key, dir } = state.sort;
   const num = ['latency', 'speed', 'health', 'tcp'];
   arr.sort((a, b) => {
+    // 收藏的节点始终置顶，不随排序键变化（常用节点不用每次找）
+    const fa = a.favorite ? 1 : 0;
+    const fb = b.favorite ? 1 : 0;
+    if (fa !== fb) return fb - fa;
+
     let va = a[key];
     let vb = b[key];
     if (num.includes(key)) {
@@ -327,7 +332,9 @@ function rowHtml(n) {
     <td class="col-name">
       <div class="name-cell">
         <span class="badge ${n.type}">${esc(typeLabel)}</span>
+        ${n.favorite ? '<span class="fav-star" title="已收藏，排序时置顶">★</span>' : ''}
         <span class="name-text" title="${esc(n.name)}">${esc(n.name || n.server)}</span>
+        ${n.note ? `<span class="pill note" title="${esc(n.note)}">${esc(n.note)}</span>` : ''}
         ${inUse ? '<span class="pill ok use-pill">系统代理</span>' : ''}
       </div>
     </td>
@@ -2336,6 +2343,26 @@ function openNodeMenu(id, x, y) {
           state.selected.clear();
           state.selected.add(id);
           runTest('full', true);
+        },
+      },
+      {
+        label: n.favorite ? '取消收藏' : '收藏节点（排序时置顶）',
+        onClick: () => {
+          n.favorite = !n.favorite;
+          saveNodes();
+          renderTable();
+          toast(n.favorite ? '已收藏，会自动排在最前' : '已取消收藏', 'ok');
+        },
+      },
+      {
+        label: n.note ? '编辑备注…' : '添加备注…',
+        onClick: async () => {
+          const note = await askText('节点备注', n.note || '', '例如：看视频 / 备用 / 低延迟');
+          if (note === null) return;
+          n.note = note;
+          saveNodes();
+          renderTable();
+          toast(note ? '备注已保存' : '备注已清除', 'ok');
         },
       },
       {
