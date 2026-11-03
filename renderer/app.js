@@ -945,7 +945,7 @@ function mergeFromSource(src, incoming, removeGone) {
 
 async function syncSources(list) {
   if (state.syncing) return toast('正在更新中，请稍候', 'err');
-  if (state.running) return toast('检测进行中，请等待检测结束后再更新', 'err');
+  if (state.running) toast('检测进行中，更新订阅会与检测抢带宽，测速结果可能偏低', 'warn', 4000);
   if (!list || !list.length) {
     return toast('没有可更新的订阅源，请先在「导入代理 → 订阅地址」添加', 'err');
   }
@@ -959,14 +959,29 @@ async function syncSources(list) {
   let viaNodeCount = 0;
   const failures = [];
 
-  for (let i = 0; i < list.length; i += 1) {
-    const src = list[i];
-    $('#statusText').textContent = `正在更新订阅 ${i + 1}/${list.length} · ${src.group || src.url}`;
-    $('#progressBar').style.width = `${Math.round((i / list.length) * 100)}%`;
+  // 拉取并行（网络 IO 才是瓶颈），合并仍串行 —— 并发改 state.nodes 会互相覆盖
+  let done = 0;
+  const fetched = await Promise.all(
+    list.map(async (src) => {
+      try {
+        const res = await window.api.fetchSubscription(src.url);
+        return { src, res, err: null };
+      } catch (e) {
+        return { src, res: null, err: e };
+      } finally {
+        done += 1;
+        $('#statusText').textContent = `正在更新订阅 ${done}/${list.length}`;
+        $('#progressBar').style.width = `${Math.round((done / list.length) * 100)}%`;
+      }
+    })
+  );
+
+  for (const item of fetched) {
+    const src = item.src;
     try {
-      // eslint-disable-next-line no-await-in-loop
-      const res = await window.api.fetchSubscription(src.url);
-      if (!res.nodes || !res.nodes.length) throw new Error('未解析到节点');
+      if (item.err) throw item.err;
+      const res = item.res;
+      if (!res || !res.nodes || !res.nodes.length) throw new Error('未解析到节点');
       if (res.viaNode) viaNodeCount += 1;
       const r = mergeFromSource(src, res.nodes, removeGone);
       added += r.added;
@@ -1169,7 +1184,8 @@ function setRunning(on) {
 
 async function runTest(mode, onlySelected, scope) {
   if (state.running) return toast('已有检测任务在进行', 'err');
-  if (state.syncing) return toast('正在更新订阅，请稍后再检测', 'err');
+  // 允许并行：订阅更新走主进程 HTTP，检测走独立内核实例，互不冲突（只是抢带宽）
+  if (state.syncing) toast('订阅正在更新，检测结果可能受带宽影响', 'warn', 4000);
   let targets;
   if (scope === 'pending') {
     targets = state.nodes.filter((n) => n.status === 'idle' || n.status === 'testing');
@@ -1753,6 +1769,9 @@ async function init() {
     setTimeout(() => disableSystemProxy(), 800);
   }
 
+  // 列宽拖拽：表头是静态的，绑定一次即可
+  enableColumnResize();
+
   // 启动时自动更新订阅
   if (state.settings.autoSyncOnStart && state.sources.length) {
     setTimeout(() => syncSources(state.sources.slice()), 900);
@@ -1911,6 +1930,11 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   $('#statusText').textContent = r.same ? '自检：代理未生效' : r.via && r.via.ok ? '自检：代理已生效' : '自检：代理链路异常';
 });
 $('#proxyBadge').addEventListener('click', toggleSystemProxy);
+
+// 托盘菜单里的「开启 / 关闭系统代理」：复用同一套状态判断
+if (window.api.onTrayToggleProxy) {
+  window.api.onTrayToggleProxy(() => toggleSystemProxy());
+}
 
 $('#btnStop').addEventListener('click', async () => {
   await window.api.cancelTest();
@@ -2306,5 +2330,68 @@ $('#tbody').addEventListener('contextmenu', (e) => {
   e.preventDefault();
   openNodeMenu(tr.dataset.id, e.clientX, e.clientY);
 });
+
+/* ------------------------------------------------------------------ */
+/* 列宽拖拽                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 每个表头右侧一个手柄，拖动即可调列宽，结果存 localStorage。
+ * 名称/服务器列内容长，默认宽度不够时用户能自己拉宽，不用改代码。
+ */
+function enableColumnResize() {
+  const table = document.querySelector('table.grid');
+  if (!table) return;
+  const ths = [...table.querySelectorAll('thead th')];
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+  } catch (e) {
+    saved = {};
+  }
+
+  ths.forEach((th, i) => {
+    // 复选框、状态点、操作列不给拖
+    if (th.classList.contains('col-check') || th.classList.contains('col-status') || th.classList.contains('col-act')) return;
+    if (saved[i]) th.style.width = saved[i] + 'px';
+    if (th.querySelector('.col-resizer')) return;
+
+    const grip = document.createElement('span');
+    grip.className = 'col-resizer';
+    grip.title = '拖动调整列宽（双击恢复默认）';
+    th.appendChild(grip);
+
+    grip.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      th.style.width = '';
+      const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+      delete map[i];
+      localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+    });
+
+    grip.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      grip.classList.add('dragging');
+      const startX = e.clientX;
+      const startW = th.getBoundingClientRect().width;
+
+      const onMove = (ev) => {
+        const w = Math.max(56, Math.round(startW + ev.clientX - startX));
+        th.style.width = w + 'px';
+      };
+      const onUp = () => {
+        grip.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+        map[i] = Math.round(th.getBoundingClientRect().width);
+        localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
 
 init();

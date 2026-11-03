@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -103,6 +103,63 @@ const { fetchSubscription, normalizeProxy, detectLocalProxy } = require('./lib/s
 /* 窗口                                                                */
 /* ------------------------------------------------------------------ */
 
+let tray = null;
+let trayTipShown = false;
+
+/** 托盘：关掉窗口后还能点回来，退出走菜单（会完整还原系统代理并杀内核） */
+function createTray() {
+  if (tray) return;
+
+  let icon = null;
+  try {
+    const ico = path.join(__dirname, '..', 'build', 'icon.ico');
+    if (fs.existsSync(ico)) icon = nativeImage.createFromPath(ico);
+  } catch (e) {
+    /* 图标读不到就用系统给的可执行文件图标兜底 */
+  }
+
+  tray = new Tray(icon && !icon.isEmpty() ? icon : nativeImage.createEmpty());
+  tray.setToolTip('V2PTools');
+
+  if (!icon || icon.isEmpty()) {
+    app
+      .getFileIcon(process.execPath, { size: 'normal' })
+      .then((img) => {
+        if (tray && img && !img.isEmpty()) tray.setImage(img);
+      })
+      .catch(() => {});
+  }
+
+  const showWindow = () => {
+    if (!win) return createWindow();
+    win.show();
+    win.focus();
+  };
+
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '显示主窗口', click: showWindow },
+      {
+        label: '开启 / 关闭系统代理',
+        click: () => {
+          showWindow();
+          if (win) win.webContents.send('tray:toggle-proxy');
+        },
+      },
+      { type: 'separator' },
+      {
+        label: '退出 V2PTools',
+        click: () => {
+          quitting = true;
+          app.quit();
+        },
+      },
+    ])
+  );
+  tray.on('double-click', showWindow);
+  tray.on('click', showWindow);
+}
+
 function createWindow() {
   bootLog('createWindow 开始');
   win = new BrowserWindow({
@@ -148,6 +205,25 @@ function createWindow() {
     clearTimeout(showTimer);
     win.show();
     if (isDev) win.webContents.openDevTools({ mode: 'detach' });
+  });
+
+  // 关闭窗口 = 收进托盘（代理还在跑，用户随时要点回来）；
+  // 真正退出走托盘菜单或 before-quit，那里会还原系统代理并杀掉内核
+  win.on('close', (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    win.hide();
+    if (process.platform === 'win32' && !trayTipShown) {
+      trayTipShown = true;
+      try {
+        tray.displayBalloon({
+          title: 'V2PTools 仍在后台运行',
+          content: '窗口已收进托盘。要完全退出，右键托盘图标选「退出」。',
+        });
+      } catch (err) {
+        // 系统通知不可用就算了，托盘图标本身已经说明状态
+      }
+    }
   });
 
   win.on('closed', () => {
@@ -435,6 +511,7 @@ app.whenReady().then(async () => {
 
   bootLog('开始创建窗口');
   createWindow();
+  createTray();
   bootLog('窗口创建完成');
 
   startProxyWatch();
@@ -450,9 +527,9 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  // 同步 quit，内核在 before-quit 里关；
-  // 这里 await core.stop() 会让进程在窗口关掉后还赖着，占住单实例锁 → 下次双击打不开
-  if (process.platform !== 'darwin') app.quit();
+  // 有托盘时窗口只是隐藏，进程继续跑（代理还在工作）；
+  // 托盘创建失败才走传统退出，避免留下看不见的后台进程
+  if (!tray && process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', async (e) => {
