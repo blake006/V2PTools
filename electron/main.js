@@ -279,11 +279,15 @@ function createTrafficWindow() {
     width: 240,
     height: 154,
     frame: false,
-    transparent: true,
+    // Windows 上透明窗口做不出背景模糊（backdrop-filter 无效），
+    // 还会把桌面图标透出来、CSS 阴影被窗口矩形裁成方形。改不透明实色。
+    transparent: false,
+    backgroundColor: '#14171f',
+    roundedCorners: true,
     resizable: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    hasShadow: false,
+    hasShadow: true,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload-traffic.js'),
@@ -309,7 +313,7 @@ function createTrafficWindow() {
     // 拖到离屏幕边缘 18px 内就吸附上去，省得手动对齐
     const display = screen.getDisplayNearestPoint({ x: x + Math.round(w / 2), y: y + Math.round(h / 2) });
     const wa = display.workArea;
-    const SNAP = 18;
+    const SNAP = 24;
     let nx = x;
     let ny = y;
     if (Math.abs(x - wa.x) <= SNAP) nx = wa.x;
@@ -1172,11 +1176,16 @@ ipcMain.handle('proxy:check', async () => {
       ? fetchExitIP(gw.port, { timeout: 12000 }).catch((e) => ({ ok: false, error: e.message }))
       : Promise.resolve({ ok: false, error: '内核未运行' }),
     // 只测 HTTP 会误判：代理能过 HTTP 但 HTTPS（CONNECT）不通的情况真实存在，
-    // 浏览器打不开网页恰恰是后者
+    // 浏览器打不开网页恰恰是后者。测两个域名，任一通过即算通，
+    // 免得单个域名被劫持/临时故障就报「HTTPS 不通」
     gw.running
-      ? requestThrough(gw.port, 'https://www.gstatic.com/generate_204', { timeout: 12000, wantBody: false })
-          .then((r) => ({ ok: r.ok && r.status < 400, status: r.status, ms: r.ms, error: r.error }))
-          .catch((e) => ({ ok: false, error: e.message }))
+      ? Promise.all(
+          ['https://www.gstatic.com/generate_204', 'https://cp.cloudflare.com/generate_204'].map((u) =>
+            requestThrough(gw.port, u, { timeout: 12000, wantBody: false })
+              .then((r) => ({ ok: r.ok && r.status < 400, status: r.status, ms: r.ms, url: u, error: r.error }))
+              .catch((e) => ({ ok: false, url: u, error: e.message }))
+          )
+        ).then((list) => list.find((x) => x.ok) || list[0])
       : Promise.resolve({ ok: false, error: '内核未运行' }),
     detectConflicts().catch(() => null),
   ]);

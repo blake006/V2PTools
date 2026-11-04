@@ -2055,7 +2055,16 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   $('#statusText').textContent = '正在做链路自检…';
   const r = await window.api.proxyCheck();
   const lines = [];
-  lines.push(r.system.active ? `系统代理：${r.system.server || '已开启'}` : '系统代理：未开启');
+  // 系统代理是否真的指向本工具，比「有没有开」更重要
+  const target = r.gateway.running ? '127.0.0.1:' + r.gateway.port : '';
+  const pointsHere = !!(r.system.active && r.system.server && target && r.system.server === target);
+  lines.push(
+    pointsHere
+      ? '系统代理：已指向本工具（' + target + '）'
+      : r.system.active
+        ? '系统代理：指向 ' + (r.system.server || '未知') + '，不是本工具'
+        : '系统代理：未开启'
+  );
   lines.push(r.gateway.running
     ? `内核：运行中，端口 ${r.gateway.port}（${r.gateway.routeLabel || '全局代理'}）`
     : '内核：未运行');
@@ -2066,11 +2075,15 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   lines.push(r.direct && r.direct.ok ? `直连出口：${r.direct.ip}` : '直连出口：失败（可能本机无外网）');
   if (r.via && r.via.ok && r.direct && r.direct.ok) {
     lines.push('');
-    lines.push(r.same ? '两个 IP 相同 → 流量没走代理，检查系统代理是否被其它软件改掉' : '两个 IP 不同 → 代理已生效');
+    lines.push(
+      r.same
+        ? '两个 IP 相同 → 流量可能没走代理（若节点出口和你在同一地区，相同属正常）'
+        : '两个 IP 不同 → 代理已生效'
+    );
   }
   if (r.via && r.via.ok && r.https && !r.https.ok) {
     lines.push('');
-    lines.push('HTTP 通但 HTTPS 不通：多半是浏览器没走系统代理（扩展 / QUIC），或节点屏蔽了该站点');
+    lines.push('HTTPS 不通但 IP 查询能通：节点屏蔽了该站点，或本地防火墙拦了 CONNECT');
   }
   if (r.conflicts && r.conflicts.hasConflict) {
     lines.push('');
@@ -2625,6 +2638,7 @@ function enableColumnResize() {
       e.preventDefault();
       e.stopPropagation();
       grip.classList.add('dragging');
+      th.classList.add('col-resizing');
       const startX = e.clientX;
       const startW = th.getBoundingClientRect().width;
 
@@ -2634,6 +2648,7 @@ function enableColumnResize() {
       };
       const onUp = () => {
         grip.classList.remove('dragging');
+        th.classList.remove('col-resizing');
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <style>
   :root {
-    --bg: rgba(20, 23, 31, 0.82);
+    --bg: #14171f;
     --line: rgba(255, 255, 255, 0.09);
     --text: #eef1f7;
     --dim: #8b93a4;
@@ -14,7 +14,7 @@
     --ok: #4ade80;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; background: transparent; overflow: hidden; }
+  html, body { height: 100%; background: #14171f; overflow: hidden; }
   body {
     font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
     -webkit-user-select: none; user-select: none;
@@ -22,18 +22,14 @@
   }
 
   .card {
-    position: relative; height: 100%; border-radius: 14px; overflow: hidden;
-    background: var(--bg);
-    backdrop-filter: blur(20px) saturate(140%);
-    -webkit-backdrop-filter: blur(20px) saturate(140%);
-    border: 1px solid var(--line);
-    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    position: relative; height: 100%; overflow: hidden;
+    background: #14171f;
     display: flex; flex-direction: column;
   }
-  /* 顶部极淡高光，玻璃质感更明显 */
+  /* 顶部一条极淡的渐变，纯色背景上也能有层次 */
   .card::before {
-    content: ''; position: absolute; inset: 0 0 auto 0; height: 46px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent);
+    content: ''; position: absolute; inset: 0 0 auto 0; height: 44px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent);
     pointer-events: none;
   }
 

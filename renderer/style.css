@@ -214,18 +214,21 @@ table.grid { width: 100%; min-width: 1180px; border-collapse: separate; border-s
   border-bottom: 1px solid var(--border);
 }
 .grid thead th { position: sticky; }
-/* 列宽拖拽手柄：加宽 + 常驻分隔线，不然用户根本看不出这里能拖 */
+/* 列宽拖拽手柄：必须完全落在 th 内部 —— 之前 right:-6px 溢出到相邻 th 下面，
+   而相邻 th 同为 sticky、同一层叠上下文，手柄被盖住，拖拽就失灵了 */
 .col-resizer {
-  position: absolute; top: 0; right: -6px; width: 13px; height: 100%;
-  cursor: col-resize; z-index: 6;
+  position: absolute; top: 0; right: 0; width: 10px; height: 100%;
+  cursor: col-resize; z-index: 2;
 }
 .col-resizer::after {
-  content: ''; position: absolute; left: 6px; top: 28%; width: 1px; height: 44%;
+  content: ''; position: absolute; right: 1px; top: 28%; width: 1px; height: 44%;
   background: var(--border); transition: background .12s, width .12s;
 }
 .col-resizer:hover::after, .col-resizer.dragging::after {
-  background: var(--accent); width: 2px; left: 5.5px;
+  background: var(--accent); width: 2px; right: .5px;
 }
+/* 正在拖的那一列抬到最上层，免得被右侧列头压住 */
+.grid thead th.col-resizing { z-index: 20; }
 .grid thead th.sortable { cursor: pointer; }
 .grid thead th.sortable:hover { color: var(--text-dim); }
 .grid thead th.sorted { color: var(--accent); }
