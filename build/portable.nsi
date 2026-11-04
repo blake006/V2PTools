@@ -4,7 +4,7 @@
 
 Unicode true
 !define APPNAME "V2PTools"
-!define VERSION "1.2.1"
+!define VERSION "1.2.2"
 
 Name "${APPNAME}"
 OutFile "..\dist\${APPNAME}-${VERSION}-win-x64-portable.exe"
@@ -20,7 +20,7 @@ SetOverwrite on
 
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
-VIAddVersionKey "FileDescription" "代理池体检 + 系统代理工具"
+VIAddVersionKey "FileDescription" "V2PTools"
 VIAddVersionKey "CompanyName" "${APPNAME}"
 VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 ${APPNAME}"
 VIAddVersionKey "FileVersion" "${VERSION}.0"

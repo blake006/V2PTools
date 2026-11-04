@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, Tray, Menu, nativeImage, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -300,10 +300,29 @@ function createTrafficWindow() {
   trafficWin = new BrowserWindow(opts);
   trafficWin.loadFile(path.join(__dirname, '..', 'renderer', 'traffic.html'));
   trafficWin.once('ready-to-show', () => trafficWin.show());
+  let snapGuard = false;
   trafficWin.on('moved', () => {
-    if (!trafficWin) return;
+    if (!trafficWin || snapGuard) return;
     const [x, y] = trafficWin.getPosition();
-    store.write('trafficPos.json', { x, y });
+    const [w, h] = trafficWin.getSize();
+
+    // 拖到离屏幕边缘 18px 内就吸附上去，省得手动对齐
+    const display = screen.getDisplayNearestPoint({ x: x + Math.round(w / 2), y: y + Math.round(h / 2) });
+    const wa = display.workArea;
+    const SNAP = 18;
+    let nx = x;
+    let ny = y;
+    if (Math.abs(x - wa.x) <= SNAP) nx = wa.x;
+    else if (Math.abs(wa.x + wa.width - (x + w)) <= SNAP) nx = wa.x + wa.width - w;
+    if (Math.abs(y - wa.y) <= SNAP) ny = wa.y;
+    else if (Math.abs(wa.y + wa.height - (y + h)) <= SNAP) ny = wa.y + wa.height - h;
+
+    if (nx !== x || ny !== y) {
+      snapGuard = true;
+      trafficWin.setPosition(nx, ny);
+      setTimeout(() => { snapGuard = false; }, 160);
+    }
+    store.write('trafficPos.json', { x: nx, y: ny });
   });
   trafficWin.on('closed', () => {
     trafficWin = null;
