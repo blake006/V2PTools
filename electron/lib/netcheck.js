@@ -37,13 +37,34 @@ function run(file, args, timeout = 6000) {
   });
 }
 
-/** 正在运行的其他代理进程 */
+/**
+ * 常见代理客户端会占用的端口。
+ * 只看这些：浏览器内置的 xray 会绑随机高位端口（如 16752），
+ * 那是它自己内部用的，不影响系统代理，不该算冲突。
+ */
+const COMMON_PROXY_PORTS = new Set([7890, 7891, 7892, 7897, 1080, 1081, 1087, 2080, 8080, 8889, 10808, 10809, 20171, 20172]);
+
+/**
+ * 正在运行的其他代理进程。
+ * 判断它有没有占用「常见代理端口」：
+ *  - 占了 = 真在提供服务，可能抢流量
+ *  - 只绑随机端口 / 没监听 = 自己内部用（GeekEZ 这类浏览器内置的 xray），不该报警
+ */
 async function detectProxyProcesses() {
-  const out = await run('tasklist', ['/fo', 'csv', '/nh']);
-  if (!out) return [];
+  const [taskOut, netOut] = await Promise.all([
+    run('tasklist', ['/fo', 'csv', '/nh']),
+    run('netstat', ['-ano', '-p', 'tcp']),
+  ]);
+  if (!taskOut) return [];
+
+  const activePids = new Set();
+  netOut.split(/\r?\n/).forEach((line) => {
+    const m = /^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
+    if (m && COMMON_PROXY_PORTS.has(Number(m[1]))) activePids.add(Number(m[2]));
+  });
 
   const found = new Map();
-  out.split(/\r?\n/).forEach((line) => {
+  taskOut.split(/\r?\n/).forEach((line) => {
     const m = /^"([^"]+)","(\d+)"/.exec(line.trim());
     if (!m) return;
     const exe = m[1];
@@ -53,8 +74,10 @@ async function detectProxyProcesses() {
     if (/^mihomo$/i.test(base)) return;
     const hit = KNOWN_PROXIES.find((k) => k.re.test(base));
     if (!hit) return;
-    if (!found.has(hit.name)) found.set(hit.name, { name: hit.name, pids: [] });
-    found.get(hit.name).pids.push(pid);
+    if (!found.has(hit.name)) found.set(hit.name, { name: hit.name, pids: [], listening: false });
+    const item = found.get(hit.name);
+    item.pids.push(pid);
+    if (activePids.has(pid)) item.listening = true;
   });
   return [...found.values()];
 }
@@ -87,13 +110,18 @@ async function detectConflicts() {
   const [processes, proxyPorts] = await Promise.all([detectProxyProcesses(), detectProxyPorts()]);
   const tunAdapters = detectTunAdapters();
 
+  // 只把「真在监听端口」的进程算作冲突；被动待命的不报警
+  const activeProcs = processes.filter((p) => p.listening);
+  const passiveProcs = processes.filter((p) => !p.listening);
+
   const parts = [];
   if (tunAdapters.length) parts.push(`虚拟网卡 ${tunAdapters.join('/')}（有软件在用 TUN 接管流量）`);
-  if (processes.length) parts.push(`${processes.map((p) => p.name).join('、')} 正在运行`);
+  if (activeProcs.length) parts.push(`${activeProcs.map((p) => p.name).join('、')} 正在运行`);
   if (proxyPorts.length) parts.push(`端口 ${proxyPorts.join('/')} 被占用`);
 
   return {
     processes,
+    passive: passiveProcs.map((p) => p.name),
     tunAdapters,
     proxyPorts,
     hasConflict: parts.length > 0,

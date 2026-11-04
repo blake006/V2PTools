@@ -178,6 +178,8 @@ function createTray() {
 let trafficWin = null;
 let trafficTimer = null;
 let lastTraffic = null;
+/** 最近 40 次下载速度，给悬浮窗画迷你波形 */
+const trafficHistory = [];
 
 /** 读 mihomo 的 /connections：里面有累计上下行字节数，两次采样相减就是实时速度 */
 function fetchConnections() {
@@ -227,6 +229,13 @@ function pushTraffic() {
     }
     lastTraffic = running ? { t: now, down, up } : null;
 
+    if (running) {
+      trafficHistory.push(spDown);
+      if (trafficHistory.length > 40) trafficHistory.shift();
+    } else {
+      trafficHistory.length = 0;
+    }
+
     trafficWin.webContents.send('traffic:data', {
       running,
       up: spUp,
@@ -238,6 +247,7 @@ function pushTraffic() {
       nodeName: (gateway && gateway.node && (gateway.node.name || gateway.node.server)) || '',
       routeLabel: (ROUTE_MODES[gateway && gateway.routeMode] || ROUTE_MODES.global).label,
       port: (gateway && gateway.port) || 0,
+      history: trafficHistory.slice(),
     });
   });
 }
@@ -264,8 +274,8 @@ function createTrafficWindow() {
 
   const saved = store.read('trafficPos.json', null);
   const opts = {
-    width: 230,
-    height: 132,
+    width: 240,
+    height: 154,
     frame: false,
     transparent: true,
     resizable: false,

@@ -1,7 +1,7 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "代理池体检 + 系统代理工具",
   "main": "electron/main.js",
   "author": {

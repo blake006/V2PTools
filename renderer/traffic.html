@@ -4,12 +4,14 @@
 <meta charset="utf-8" />
 <style>
   :root {
-    --bg: rgba(18, 21, 28, 0.92);
-    --line: rgba(255, 255, 255, 0.1);
-    --text: #e8ecf4;
+    --bg: rgba(20, 23, 31, 0.82);
+    --line: rgba(255, 255, 255, 0.09);
+    --text: #eef1f7;
     --dim: #8b93a4;
-    --up: #ff9f43;
+    --faint: #6b7280;
+    --up: #ffa94d;
     --down: #4f8cff;
+    --ok: #4ade80;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; background: transparent; overflow: hidden; }
@@ -18,60 +20,125 @@
     -webkit-user-select: none; user-select: none;
     -webkit-app-region: drag;
   }
+
   .card {
-    height: 100%; border-radius: 12px; background: var(--bg);
+    position: relative; height: 100%; border-radius: 14px; overflow: hidden;
+    background: var(--bg);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
     border: 1px solid var(--line);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-    padding: 8px 12px; display: flex; flex-direction: column; justify-content: space-between;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    display: flex; flex-direction: column;
   }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .label { font-size: 10.5px; color: var(--dim); letter-spacing: .02em; }
-  .val { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
-  .up { color: var(--up); }
-  .down { color: var(--down); }
-  .total { font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
-  .node-line {
-    font-size: 10.5px; color: var(--dim); line-height: 1.3;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    margin: -2px 0 1px;
+  /* 顶部极淡高光，玻璃质感更明显 */
+  .card::before {
+    content: ''; position: absolute; inset: 0 0 auto 0; height: 46px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent);
+    pointer-events: none;
   }
-  .head { display: flex; align-items: center; gap: 6px; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,.7); }
-  .dot.off { background: #6b7280; box-shadow: none; }
+
+  .head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 9px 12px 6px;
+  }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--ok); box-shadow: 0 0 8px rgba(74, 222, 128, 0.75);
+  }
+  .dot.on { animation: breathe 2.4s ease-in-out infinite; }
+  .dot.off { background: #5b6473; box-shadow: none; animation: none; }
+  @keyframes breathe {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .55; transform: scale(.86); }
+  }
+  .mode { font-size: 11px; color: var(--text); font-weight: 600; }
+  .port { font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .spacer { flex: 1; }
   .close {
-    -webkit-app-region: no-drag; cursor: pointer; color: var(--dim);
-    font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+    -webkit-app-region: no-drag; cursor: pointer; color: var(--faint);
+    font-size: 15px; line-height: 1; padding: 2px 5px; border-radius: 5px;
+    transition: background .12s, color .12s;
   }
-  .close:hover { color: #fff; background: rgba(255,255,255,.1); }
+  .close:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+
+  .node {
+    padding: 0 12px 8px; font-size: 10.5px; color: var(--dim); line-height: 1.35;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .split { height: 1px; margin: 0 12px; background: var(--line); }
+
+  .speeds {
+    display: flex; align-items: flex-end; gap: 10px;
+    padding: 9px 12px 2px;
+  }
+  .sp { flex: 1; min-width: 0; }
+  .sp .k {
+    display: flex; align-items: center; gap: 3px;
+    font-size: 9.5px; color: var(--faint); margin-bottom: 1px;
+  }
+  .sp .v {
+    font-size: 15px; font-weight: 650; letter-spacing: -.01em;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .sp .v small { font-size: 9.5px; font-weight: 500; opacity: .65; margin-left: 2px; }
+  .sp.up .v { color: var(--up); }
+  .sp.down .v { color: var(--down); }
+
+  .wave { display: block; width: 100%; height: 24px; margin-top: 2px; }
+
+  .foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 12px 9px; font-size: 9.5px; color: var(--faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .foot b { color: var(--dim); font-weight: 500; }
 </style>
 </head>
 <body>
   <div class="card">
-    <div class="row">
-      <div class="head"><span class="dot off" id="dot"></span><span class="label" id="title">流量</span></div>
+    <div class="head">
+      <span class="dot off" id="dot"></span>
+      <span class="mode" id="mode">未开启</span>
+      <span class="port" id="port"></span>
+      <span class="spacer"></span>
       <span class="close" id="close" title="关闭">×</span>
     </div>
-    <div class="node-line" id="nodeLine">未开启代理</div>
-    <div class="row">
-      <span class="label">↑ 上传</span><span class="val up" id="up">—</span>
+
+    <div class="node" id="node">未开启代理</div>
+
+    <div class="split"></div>
+
+    <div class="speeds">
+      <div class="sp up">
+        <div class="k"><span>↑</span><span>上传</span></div>
+        <div class="v" id="up">—</div>
+      </div>
+      <div class="sp down">
+        <div class="k"><span>↓</span><span>下载</span></div>
+        <div class="v" id="down">—</div>
+      </div>
     </div>
-    <div class="row">
-      <span class="label">↓ 下载</span><span class="val down" id="down">—</span>
-    </div>
-    <div class="row">
-      <span class="label">累计</span><span class="total" id="total">—</span>
+
+    <svg class="wave" id="wave" preserveAspectRatio="none"></svg>
+
+    <div class="foot">
+      <span>累计</span>
+      <span><b id="total">—</b></span>
     </div>
   </div>
+
 <script>
   const $ = (s) => document.querySelector(s);
 
   function fmtSpeed(bps) {
-    if (bps == null || !isFinite(bps)) return '—';
+    if (bps == null || !isFinite(bps)) return { v: '—', u: '' };
     const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
     let v = bps;
     let i = 0;
     while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
-    return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + ' ' + units[i];
+    const num = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+    return { v: num, u: units[i] };
   }
 
   function fmtBytes(b) {
@@ -83,21 +150,55 @@
     return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' ' + units[i];
   }
 
+  /** 迷你波形：最近 40 次下载速度，折线 + 渐变填充 */
+  function drawWave(list, on) {
+    const svg = $('#wave');
+    const W = 230;
+    const H = 24;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+    if (!on || !list || list.length < 2) {
+      svg.innerHTML = '';
+      return;
+    }
+    const max = Math.max.apply(null, list.concat([1]));
+    const step = W / (list.length - 1);
+    const pts = list.map((v, i) => {
+      const x = i * step;
+      const y = H - 2 - (Math.min(v, max) / max) * (H - 6);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    });
+
+    svg.innerHTML =
+      '<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0%" stop-color="#4f8cff" stop-opacity=".45"/>' +
+      '<stop offset="100%" stop-color="#4f8cff" stop-opacity="0"/>' +
+      '</linearGradient></defs>' +
+      '<polygon points="0,' + H + ' ' + pts.join(' ') + ' ' + W + ',' + H + '" fill="url(#g)"/>' +
+      '<polyline points="' + pts.join(' ') + '" fill="none" stroke="#4f8cff" stroke-width="1.5" ' +
+      'stroke-linejoin="round" stroke-linecap="round" opacity=".9"/>';
+  }
+
   window.trafficApi.onData((d) => {
     const on = !!d.running;
     $('#dot').classList.toggle('off', !on);
-    $('#title').textContent = on ? (d.tunMode ? 'TUN 全局' : '系统代理') : '未开启';
+    $('#dot').classList.toggle('on', on);
+    $('#mode').textContent = on ? (d.tunMode ? 'TUN 全局' : '系统代理') : '未开启';
+    $('#port').textContent = on && d.port ? ':' + d.port : '';
 
-    // 当前用的哪个节点、什么分流 —— 悬浮窗一眼能看到，不用切回主界面
     const line = on
-      ? (d.nodeName ? `${d.nodeName} · ${d.routeLabel || ''}` : d.routeLabel || '已开启')
+      ? (d.nodeName ? d.nodeName + (d.routeLabel ? ' · ' + d.routeLabel : '') : d.routeLabel || '已开启')
       : '未开启代理';
-    $('#nodeLine').textContent = line;
-    $('#nodeLine').title = line;
+    $('#node').textContent = line;
+    $('#node').title = line;
 
-    $('#up').textContent = on ? fmtSpeed(d.up) : '—';
-    $('#down').textContent = on ? fmtSpeed(d.down) : '—';
-    $('#total').textContent = on ? `↑${fmtBytes(d.upTotal)} ↓${fmtBytes(d.downTotal)}` : '—';
+    const u = fmtSpeed(d.up);
+    const dn = fmtSpeed(d.down);
+    $('#up').innerHTML = on ? u.v + (u.u ? '<small>' + u.u + '</small>' : '') : '—';
+    $('#down').innerHTML = on ? dn.v + (dn.u ? '<small>' + dn.u + '</small>' : '') : '—';
+    $('#total').textContent = on ? '↑' + fmtBytes(d.upTotal) + '   ↓' + fmtBytes(d.downTotal) : '—';
+
+    drawWave(d.history, on);
   });
 
   $('#close').addEventListener('click', () => window.trafficApi.close());
