@@ -707,3 +707,11 @@ tr.in-use .row-act { opacity: 1; }
   display: flex; gap: 12px; font-size: 11px; color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+
+/* 列顺序拖拽 */
+.grid thead th.col-movable { cursor: grab; }
+.grid thead th.col-dragging { opacity: .5; cursor: grabbing; }
+.col-drop-indicator {
+  position: fixed; width: 2px; display: none; z-index: 60;
+  background: var(--accent); border-radius: 1px; pointer-events: none;
+}

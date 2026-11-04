@@ -438,6 +438,8 @@ function renderTable() {
   updateStats();
   applyFilters();
   updateSelInfo();
+  // 新行按默认顺序生成，这里按用户保存的列顺序重排一次
+  applyColumnOrder();
 }
 
 function updateRow(n) {
@@ -1841,8 +1843,10 @@ async function init() {
     setTimeout(() => disableSystemProxy(), 800);
   }
 
-  // 列宽拖拽：表头是静态的，绑定一次即可
+  // 列宽拖拽 + 列顺序拖拽：表头是静态的，绑定一次即可
   enableColumnResize();
+  enableColumnReorder();
+  applyColumnOrder();
 
   // 启动时自动更新订阅
   if (state.settings.autoSyncOnStart && state.sources.length) {
@@ -2314,6 +2318,7 @@ $$('#filterChips .chip').forEach((c) => {
 
 $$('.grid thead th.sortable').forEach((th) => {
   th.addEventListener('click', () => {
+    if (window.__colJustDragged) return;
     const key = th.dataset.sort;
     if (state.sort.key === key) state.sort.dir *= -1;
     else state.sort = { key, dir: 1 };
@@ -2620,4 +2625,172 @@ function enableColumnResize() {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/* 列顺序拖拽                                                          */
+/* ------------------------------------------------------------------ */
+
+const COL_FIXED = ['col-check', 'col-status', 'col-act'];
+
+/** 给表头每列打上唯一 key（页面加载即可用，早于 init） */
+function tagColumnKeys() {
+  const headRow = document.querySelector('table.grid thead tr');
+  if (!headRow) return;
+  [...headRow.children].forEach((th, i) => {
+    if (!th.dataset.col) th.dataset.col = 'c' + i;
+  });
+}
+
+function colKey(th) {
+  // 延迟/抖动/速度共用 col-num，class 名不唯一，必须用 dataset.col
+  if (th.dataset && th.dataset.col) return th.dataset.col;
+  const parent = th.parentNode;
+  const i = parent ? [...parent.children].indexOf(th) : -1;
+  return i >= 0 ? 'i' + i : '';
+}
+
+function isMovableCol(th) {
+  // 按 class 判断固定列：colKey 现在返回 dataset.col，不再等于 col-xxx
+  return !COL_FIXED.some((c) => th.classList.contains(c));
+}
+
+function saveColumnOrder() {
+  const headRow = document.querySelector('table.grid thead tr');
+  if (!headRow) return;
+  const order = [...headRow.children].map(colKey);
+  localStorage.setItem('v2p.colorder', JSON.stringify(order));
+}
+
+/** 把表头和所有数据行按保存的列顺序重排（渲染后必须调一次，否则新行还是旧顺序） */
+function applyColumnOrder() {
+  let order = [];
+  try {
+    order = JSON.parse(localStorage.getItem('v2p.colorder') || '[]');
+  } catch (e) {
+    order = [];
+  }
+  if (!order.length) return;
+
+  const table = document.querySelector('table.grid');
+  if (!table) return;
+  const headRow = table.querySelector('thead tr');
+  const keys = [...headRow.children].map(colKey);
+  if (keys.length !== order.length) return;
+  // key 集合必须完全一致，避免版本升级增删列后错位
+  if (order.slice().sort().join('|') !== keys.slice().sort().join('|')) return;
+
+  const rows = [headRow, ...table.querySelectorAll('#tbody tr')];
+  rows.forEach((tr) => {
+    const cells = [...tr.children];
+    if (cells.length !== keys.length) return;
+    const byKey = {};
+    keys.forEach((k, i) => {
+      if (k) byKey[k] = cells[i];
+    });
+    order.forEach((k) => {
+      if (byKey[k]) tr.appendChild(byKey[k]);
+    });
+  });
+}
+
+/**
+ * 拖动表头换列位置。
+ * 拖拽期间显示一条竖线作为落点提示；松手后重排 thead 与所有 tbody 行并保存顺序。
+ */
+/**
+ * 拖动表头换列位置（原生 drag & drop）。
+ * 拖到目标列左半边=插到它前面，右半边=插到后面。
+ */
+function moveColumn(from, to, before) {
+  const table = document.querySelector('table.grid');
+  if (!table) return;
+  const headRow = table.querySelector('thead tr');
+  const rows = [headRow, ...table.querySelectorAll('#tbody tr')];
+  // 索引先算好：第一行重排后 children 顺序就变了
+  const idxFrom = [...headRow.children].indexOf(from);
+  const idxTo = [...headRow.children].indexOf(to);
+  if (idxFrom < 0 || idxTo < 0 || idxFrom === idxTo) return;
+
+  rows.forEach((tr) => {
+    const cells = [...tr.children];
+    const cell = cells[idxFrom];
+    if (!cell || !cells[idxTo]) return;
+    if (before) tr.insertBefore(cell, cells[idxTo]);
+    else tr.insertBefore(cell, cells[idxTo].nextSibling);
+  });
+  saveColumnOrder();
+  window.__colJustDragged = true;
+  setTimeout(() => { window.__colJustDragged = false; }, 0);
+}
+
+function enableColumnReorder() {
+  const table = document.querySelector('table.grid');
+  const headRow = table && table.querySelector('thead tr');
+  if (!headRow) return;
+
+  tagColumnKeys();
+
+  let indicator = document.querySelector('.col-drop-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.className = 'col-drop-indicator';
+    document.body.appendChild(indicator);
+  }
+
+  let dragFrom = null;
+
+  const hideIndicator = () => { indicator.style.display = 'none'; };
+
+  [...headRow.children].forEach((th) => {
+    if (!isMovableCol(th)) return;
+    if (th.dataset.reorderBound) return;
+    th.dataset.reorderBound = '1';
+    th.classList.add('col-movable');
+    th.draggable = true;
+
+    th.addEventListener('dragstart', (e) => {
+      // 拖列宽手柄时不要触发换列
+      if (e.target.closest && e.target.closest('.col-resizer')) {
+        e.preventDefault();
+        return;
+      }
+      dragFrom = th;
+      th.classList.add('col-dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', th.dataset.col); } catch (err) { /* 某些环境不允许 */ }
+      }
+    });
+
+    th.addEventListener('dragover', (e) => {
+      if (!dragFrom || dragFrom === th) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      const r = th.getBoundingClientRect();
+      indicator.style.display = 'block';
+      indicator.style.left = (e.clientX < r.left + r.width / 2 ? r.left : r.right) + 'px';
+      indicator.style.top = r.top + 'px';
+      indicator.style.height = r.height + 'px';
+    });
+
+    th.addEventListener('dragleave', hideIndicator);
+
+    th.addEventListener('drop', (e) => {
+      e.preventDefault();
+      hideIndicator();
+      if (!dragFrom || dragFrom === th) return;
+      const r = th.getBoundingClientRect();
+      moveColumn(dragFrom, th, e.clientX < r.left + r.width / 2);
+    });
+
+    th.addEventListener('dragend', () => {
+      th.classList.remove('col-dragging');
+      dragFrom = null;
+      hideIndicator();
+    });
+  });
+}
+
+// 先给列打唯一 key 并绑定拖拽，再启动（renderTable 里的 applyColumnOrder 依赖它）
+tagColumnKeys();
+enableColumnReorder();
 init();
