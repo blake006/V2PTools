@@ -30,6 +30,11 @@
   .up { color: var(--up); }
   .down { color: var(--down); }
   .total { font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .node-line {
+    font-size: 10.5px; color: var(--dim); line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin: -2px 0 1px;
+  }
   .head { display: flex; align-items: center; gap: 6px; }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,.7); }
   .dot.off { background: #6b7280; box-shadow: none; }
@@ -46,6 +51,7 @@
       <div class="head"><span class="dot off" id="dot"></span><span class="label" id="title">流量</span></div>
       <span class="close" id="close" title="关闭">×</span>
     </div>
+    <div class="node-line" id="nodeLine">未开启代理</div>
     <div class="row">
       <span class="label">↑ 上传</span><span class="val up" id="up">—</span>
     </div>
@@ -81,6 +87,14 @@
     const on = !!d.running;
     $('#dot').classList.toggle('off', !on);
     $('#title').textContent = on ? (d.tunMode ? 'TUN 全局' : '系统代理') : '未开启';
+
+    // 当前用的哪个节点、什么分流 —— 悬浮窗一眼能看到，不用切回主界面
+    const line = on
+      ? (d.nodeName ? `${d.nodeName} · ${d.routeLabel || ''}` : d.routeLabel || '已开启')
+      : '未开启代理';
+    $('#nodeLine').textContent = line;
+    $('#nodeLine').title = line;
+
     $('#up').textContent = on ? fmtSpeed(d.up) : '—';
     $('#down').textContent = on ? fmtSpeed(d.down) : '—';
     $('#total').textContent = on ? `↑${fmtBytes(d.upTotal)} ↓${fmtBytes(d.downTotal)}` : '—';

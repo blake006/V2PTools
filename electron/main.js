@@ -234,6 +234,10 @@ function pushTraffic() {
       upTotal: up,
       downTotal: down,
       tunMode: !!(gateway && gateway.tunMode),
+      // 顺带把「当前用哪个节点、什么分流」带过去，悬浮窗就不用再单独问一次
+      nodeName: (gateway && gateway.node && (gateway.node.name || gateway.node.server)) || '',
+      routeLabel: (ROUTE_MODES[gateway && gateway.routeMode] || ROUTE_MODES.global).label,
+      port: (gateway && gateway.port) || 0,
     });
   });
 }
@@ -260,8 +264,8 @@ function createTrafficWindow() {
 
   const saved = store.read('trafficPos.json', null);
   const opts = {
-    width: 220,
-    height: 104,
+    width: 230,
+    height: 132,
     frame: false,
     transparent: true,
     resizable: false,
