@@ -88,8 +88,8 @@ async function detectConflicts() {
   const tunAdapters = detectTunAdapters();
 
   const parts = [];
-  if (tunAdapters.length) parts.push(`检测到虚拟网卡 ${tunAdapters.join('/')}，可能有软件在用 TUN 接管全部流量`);
-  if (processes.length) parts.push(`其他代理软件在运行：${processes.map((p) => p.name).join('、')}`);
+  if (tunAdapters.length) parts.push(`虚拟网卡 ${tunAdapters.join('/')}（有软件在用 TUN 接管流量）`);
+  if (processes.length) parts.push(`${processes.map((p) => p.name).join('、')} 正在运行`);
   if (proxyPorts.length) parts.push(`端口 ${proxyPorts.join('/')} 被占用`);
 
   return {

@@ -1624,7 +1624,18 @@ async function enableSystemProxyById(id, mode) {
     setStatus(`系统代理已开启，出口节点：${n.name || n.server}`);
     // 机器上还开着别的代理软件时，系统代理可能被它们抢走或用 TUN 绕过 —— 直接说出来
     if (st.conflicts && st.conflicts.hasConflict) {
-      toast('注意：' + st.conflicts.summary + '。它们可能抢走系统代理，建议先退出', 'warn', 8000);
+      const c = st.conflicts;
+      // 真威胁：别人开了 TUN、或占着代理端口 —— 每次都提醒
+      const serious = (c.tunAdapters && c.tunAdapters.length) || (c.proxyPorts && c.proxyPorts.length);
+      // 只是「有别的代理进程在跑」：一个会话只提醒一次，别每次开代理都弹
+      const key = 'v2p.conflictTip.' + c.summary;
+      const tipped = sessionStorage.getItem(key);
+      if (serious) {
+        toast('注意：' + c.summary + '。这会抢走流量，建议先退出', 'warn', 8000);
+      } else if (!tipped) {
+        sessionStorage.setItem(key, '1');
+        toast('检测到 ' + c.summary + '。只要代理正常可以忽略，本次不再提示', 'warn', 6000);
+      }
     }
     // 后台校验真实出口 IP
     window.api.proxyProbe().then((r) => {
@@ -2054,7 +2065,7 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   if (r.conflicts && r.conflicts.hasConflict) {
     lines.push('');
     lines.push('⚠ 环境冲突：' + r.conflicts.summary);
-    lines.push('这些软件会抢系统代理、或用 TUN 直接接管流量，建议先退出它们再试');
+    lines.push('如果只是进程在跑、没开 TUN，通常不影响；代理不通时再考虑退出它们');
   }
   if (r.gateway.node) lines.push(`\n节点：${r.gateway.node.name}（${r.gateway.node.server}:${r.gateway.node.port}）`);
   alert(lines.join('\n'));
