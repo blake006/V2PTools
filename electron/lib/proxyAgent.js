@@ -100,6 +100,9 @@ class HttpsTunnelAgent extends https.Agent {
 HttpsTunnelAgent.prototype.createConnection = makeCreateConnection(true);
 
 function agentFor(proxyPort, isHttps) {
+  // port 为 0 / 空表示直连：必须返回 undefined，让 Node 用默认直连 agent。
+  // 之前这里无条件返回代理 agent，导致「直连出口」永远连 127.0.0.1:0 而失败。
+  if (!proxyPort) return undefined;
   return isHttps ? new HttpsTunnelAgent({ proxyPort }) : new HttpTunnelAgent({ proxyPort });
 }
 

@@ -356,9 +356,9 @@ function rowHtml(n) {
   const failCls = n.status === 'fail' ? ' fail' : '';
   const inUse = proxyInUseId() === n.id;
   return `
-    <td class="col-check"><input type="checkbox" data-check="${n.id}" ${state.selected.has(n.id) ? 'checked' : ''} /></td>
-    <td class="col-status"><span class="status-dot ${n.status === 'ok' ? 'ok' : n.status === 'fail' ? 'fail' : n.status === 'testing' ? 'testing' : ''}" title="${esc(n.error || '')}"></span></td>
-    <td class="col-name">
+    <td data-col="c0" class="col-check"><input type="checkbox" data-check="${n.id}" ${state.selected.has(n.id) ? 'checked' : ''} /></td>
+    <td data-col="c1" class="col-status"><span class="status-dot ${n.status === 'ok' ? 'ok' : n.status === 'fail' ? 'fail' : n.status === 'testing' ? 'testing' : ''}" title="${esc(n.error || '')}"></span></td>
+    <td data-col="c2" class="col-name">
       <div class="name-cell">
         <span class="badge ${n.type}">${esc(typeLabel)}</span>
         ${n.favorite ? '<span class="fav-star" title="已收藏，排序时置顶">★</span>' : ''}
@@ -367,16 +367,16 @@ function rowHtml(n) {
         ${inUse ? '<span class="pill ok use-pill">系统代理</span>' : ''}
       </div>
     </td>
-    <td class="col-server mono dim" title="${esc(n.server)}">${esc(n.server)}:${n.port}</td>
-    <td class="col-num" data-cell="latency">${fmtLatency(n.latency)}</td>
-    <td class="col-num dim" data-cell="jitter">${n.jitter != null ? n.jitter + ' ms' : '—'}</td>
-    <td class="col-num" data-cell="speed">${fmtSpeed(n.speed)}</td>
-    <td class="col-ip mono" data-cell="ip">${n.ip ? esc(n.ip) : '<span class="dim">—</span>'}</td>
-    <td class="col-loc" data-cell="loc">${locHtml(n)}</td>
-    <td class="col-isp dim" data-cell="isp" title="${esc(n.isp || '')}">${esc(n.isp || '—')}</td>
-    <td class="col-iptype" data-cell="iptype">${ipTypeCell(n)}</td>
-    <td class="col-health" data-cell="health">${healthHtml(n)}</td>
-    <td class="col-act">
+    <td data-col="c3" class="col-server mono dim" title="${esc(n.server)}">${esc(n.server)}:${n.port}</td>
+    <td data-col="c4" class="col-num" data-cell="latency">${fmtLatency(n.latency)}</td>
+    <td data-col="c5" class="col-num dim" data-cell="jitter">${n.jitter != null ? n.jitter + ' ms' : '—'}</td>
+    <td data-col="c6" class="col-num" data-cell="speed">${fmtSpeed(n.speed)}</td>
+    <td data-col="c7" class="col-ip mono" data-cell="ip">${n.ip ? esc(n.ip) : '<span class="dim">—</span>'}</td>
+    <td data-col="c8" class="col-loc" data-cell="loc">${locHtml(n)}</td>
+    <td data-col="c9" class="col-isp dim" data-cell="isp" title="${esc(n.isp || '')}">${esc(n.isp || '—')}</td>
+    <td data-col="c10" class="col-iptype" data-cell="iptype">${ipTypeCell(n)}</td>
+    <td data-col="c11" class="col-health" data-cell="health">${healthHtml(n)}</td>
+    <td data-col="c12" class="col-act">
       <div class="row-act">
         <button class="icon-mini ${inUse ? 'on' : ''}" data-act="use" data-id="${n.id}" title="${inUse ? '系统代理正在使用该节点' : '设为系统代理'}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v9" stroke-linecap="round"/><path d="M6.4 6.4a8 8 0 1 0 11.2 0" stroke-linecap="round"/></svg>
@@ -2716,12 +2716,14 @@ function applyColumnOrder() {
 
   const rows = [headRow, ...table.querySelectorAll('#tbody tr')];
   rows.forEach((tr) => {
-    const cells = [...tr.children];
-    if (cells.length !== keys.length) return;
+    // 按单元格自己的 data-col 映射 —— 之前按「表头当前位置」映射，
+    // 但表头已是保存后的顺序、新渲染的行是默认顺序，位置一对不上就整体错位
     const byKey = {};
-    keys.forEach((k, i) => {
-      if (k) byKey[k] = cells[i];
+    [...tr.children].forEach((c) => {
+      const k = c.dataset && c.dataset.col;
+      if (k) byKey[k] = c;
     });
+    if (Object.keys(byKey).length !== order.length) return;
     order.forEach((k) => {
       if (byKey[k]) tr.appendChild(byKey[k]);
     });
@@ -2740,22 +2742,37 @@ function moveColumn(from, to, before) {
   const table = document.querySelector('table.grid');
   if (!table) return;
   const headRow = table.querySelector('thead tr');
-  const rows = [headRow, ...table.querySelectorAll('#tbody tr')];
-  // 索引先算好：第一行重排后 children 顺序就变了
-  const idxFrom = [...headRow.children].indexOf(from);
-  const idxTo = [...headRow.children].indexOf(to);
-  if (idxFrom < 0 || idxTo < 0 || idxFrom === idxTo) return;
+  if (!headRow) return;
 
+  const order = [...headRow.children].map(colKey);
+  const fromKey = colKey(from);
+  const toKey = colKey(to);
+  if (!fromKey || !toKey || fromKey === toKey) return;
+
+  // 先算出目标顺序，再按 key 重排每一行 —— 用索引移动时，
+  // 表头移动后索引基准就变了，数据行容易和表头差一格
+  const next = order.filter((k) => k !== fromKey);
+  let idx = next.indexOf(toKey);
+  if (idx < 0) return;
+  if (!before) idx += 1;
+  next.splice(idx, 0, fromKey);
+
+  const rows = [headRow, ...table.querySelectorAll('#tbody tr')];
   rows.forEach((tr) => {
-    const cells = [...tr.children];
-    const cell = cells[idxFrom];
-    if (!cell || !cells[idxTo]) return;
-    if (before) tr.insertBefore(cell, cells[idxTo]);
-    else tr.insertBefore(cell, cells[idxTo].nextSibling);
+    const byKey = {};
+    [...tr.children].forEach((c) => {
+      const k = c.dataset && c.dataset.col;
+      if (k) byKey[k] = c;
+    });
+    if (Object.keys(byKey).length !== next.length) return;
+    next.forEach((k) => tr.appendChild(byKey[k]));
   });
+
   saveColumnOrder();
   window.__colJustDragged = true;
-  setTimeout(() => { window.__colJustDragged = false; }, 0);
+  setTimeout(() => {
+    window.__colJustDragged = false;
+  }, 0);
 }
 
 function enableColumnReorder() {
