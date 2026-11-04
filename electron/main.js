@@ -212,6 +212,8 @@ function fetchConnections() {
 
 function pushTraffic() {
   if (!trafficWin || trafficWin.isDestroyed()) return;
+  // 悬浮窗被挡住/最小化时没人看，不必每秒拉一次
+  if (!trafficWin.isVisible()) return;
   const running = !!(gateway && gateway.running);
 
   fetchConnections().then((data) => {
@@ -578,8 +580,8 @@ let watchFails = 0;
  *
  * 空闲时（系统代理没开）自动放慢到 20s，别为了看一个「还是关着」白白跑 reg query。
  */
-const WATCH_IDLE_MS = 20000;
-const WATCH_ACTIVE_MS = 5000;
+const WATCH_IDLE_MS = 25000;
+const WATCH_ACTIVE_MS = 8000;
 const WATCH_MAX_BACKOFF = 60000;
 
 function startProxyWatch() {
@@ -605,7 +607,7 @@ function startProxyWatch() {
         gateway.aliveFlag = alive;
         if (!alive) bootLog('看守：网关内核无响应，标记为异常');
         // 3. 每 30s（约 6 个 tick）做一次真实出口探测
-        if (alive && tick % 6 === 0) await gateway.probeWithCache({ timeout: 8000 });
+        if (alive && tick % 8 === 0) await gateway.probeWithCache({ timeout: 8000 });
       } else {
         gateway.aliveFlag = false;
       }

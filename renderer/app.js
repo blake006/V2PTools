@@ -169,8 +169,18 @@ function applyFilters() {
   }
   renderActiveFilters();
   updateFilterBadge();
-  renderSidebar();
+  scheduleSidebar();
   updateStatusCounts();
+}
+
+let sidebarTimer = null;
+/** 侧栏要遍历全部节点算分组计数，高频筛选时合并到一帧 */
+function scheduleSidebar() {
+  if (sidebarTimer) return;
+  sidebarTimer = setTimeout(() => {
+    sidebarTimer = null;
+    renderSidebar();
+  }, 60);
 }
 
 let afPending = false;

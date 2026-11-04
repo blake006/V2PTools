@@ -281,7 +281,7 @@ class Runner {
             // 留最近 20 次结果：判断节点是「一直这么慢」还是「这次抽风」
             history: (Array.isArray(n.history) ? n.history : [])
               .concat([{ t: Date.now(), latency: n.latency ?? null, speed: n.speed ?? null, health: n.status === 'ok' ? score : null }])
-              .slice(-20),
+              .slice(-12),
           };
           Object.assign(n, patch);
           this.emit({ type: 'node', id: n.id, patch, finished, total, silent: true });

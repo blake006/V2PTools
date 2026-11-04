@@ -106,7 +106,11 @@ async function detectProxyPorts(ports = [7897, 1080, 10808, 10809, 2080, 8889]) 
 /**
  * @returns {{ processes: Array, tunAdapters: string[], proxyPorts: number[], hasConflict: boolean, summary: string }}
  */
-async function detectConflicts() {
+let conflictCache = { at: 0, data: null };
+
+async function detectConflicts(force) {
+  const now = Date.now();
+  if (!force && conflictCache.data && now - conflictCache.at < 30000) return conflictCache.data;
   const [processes, proxyPorts] = await Promise.all([detectProxyProcesses(), detectProxyPorts()]);
   const tunAdapters = detectTunAdapters();
 
@@ -119,7 +123,7 @@ async function detectConflicts() {
   if (activeProcs.length) parts.push(`${activeProcs.map((p) => p.name).join('、')} 正在运行`);
   if (proxyPorts.length) parts.push(`端口 ${proxyPorts.join('/')} 被占用`);
 
-  return {
+  const result = {
     processes,
     passive: passiveProcs.map((p) => p.name),
     tunAdapters,
@@ -127,6 +131,8 @@ async function detectConflicts() {
     hasConflict: parts.length > 0,
     summary: parts.join('；'),
   };
+  conflictCache = { at: now, data: result };
+  return result;
 }
 
 module.exports = { detectConflicts, detectProxyProcesses, detectTunAdapters, detectProxyPorts };
