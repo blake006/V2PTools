@@ -117,6 +117,18 @@
 </div>
 
 <!-- ============ 弹层：更多 ============ -->
+<div class="sheet" id="sheetQr" hidden>
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-body">
+    <div class="sheet-head"><b id="qrTitle">节点二维码</b><button class="x" data-close>×</button></div>
+    <div class="qr-wrap">
+      <div id="qrBox" class="qr-box"></div>
+      <div class="qr-link" id="qrLink"></div>
+      <button class="btn full" id="btnQrCopy">复制分享链接</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet" id="sheetMore" hidden>
   <div class="sheet-mask" data-close></div>
   <div class="sheet-body">
@@ -209,6 +221,8 @@
 <div class="toast-wrap" id="toastWrap"></div>
 
 <script src="vendor/js-yaml.min.js"></script>
+<script src="qrcode.js"></script>
+<script src="share.js"></script>
 <script src="vendor/loader.js"></script>
 <script src="vendor/filter.js"></script>
 <script src="vendor/merge.js"></script>

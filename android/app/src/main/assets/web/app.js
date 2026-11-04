@@ -1159,6 +1159,70 @@
     openSheet('sheetMore');
   });
   $('#btnSyncSources').addEventListener('click', syncAllSources);
+
+  /* ================= 节点二维码 ================= */
+
+  /** 把节点分享链接画成二维码，手机/别的设备扫一下就能导入 */
+  function showNodeQr(nodeId) {
+    var n = state.nodes.filter(function (x) { return x.id === nodeId; })[0];
+    if (!n) return;
+
+    var link = window.IPHShare ? window.IPHShare.toShareLink(n) : '';
+    if (!link) return toast((n.type || '该协议') + ' 暂不支持生成链接，无法画二维码', 'err');
+
+    var box = $('#qrBox');
+    box.innerHTML = '';
+    try {
+      // typeNumber 0 = 自动选版本；M 级纠错，容错和尺寸平衡
+      var qr = qrcode(0, 'M');
+      qr.addData(link);
+      qr.make();
+      box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+    } catch (e) {
+      return toast('生成二维码失败：' + (e.message || e), 'err');
+    }
+
+    $('#qrTitle').textContent = n.name || (n.server + ':' + n.port);
+    $('#qrLink').textContent = link.length > 120 ? link.slice(0, 120) + '…' : link;
+    $('#sheetQr').dataset.nodeId = n.id;
+    openSheet('sheetQr');
+  }
+
+  $('#btnQrCopy').addEventListener('click', async function () {
+    var id = $('#sheetQr').dataset.nodeId;
+    var n = state.nodes.filter(function (x) { return x.id === id; })[0];
+    var link = n && window.IPHShare ? window.IPHShare.toShareLink(n) : '';
+    if (!link) return;
+    var r = await call('copy', { text: link });
+    toast(r && r.ok ? '分享链接已复制' : '复制失败', r && r.ok ? 'ok' : 'err');
+  });
+
+  // 长按卡片弹出二维码（移动端没有右键，长按是最自然的入口）
+  var pressTimer = null;
+  function clearPress() {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+  }
+  document.addEventListener(
+    'touchstart',
+    function (e) {
+      var card = e.target.closest ? e.target.closest('.card') : null;
+      if (!card || e.target.closest('[data-check]')) return;
+      clearPress();
+      var id = card.dataset.id;
+      pressTimer = setTimeout(function () {
+        pressTimer = null;
+        if (navigator.vibrate) navigator.vibrate(15);
+        showNodeQr(id);
+      }, 480);
+    },
+    { passive: true }
+  );
+  document.addEventListener('touchend', clearPress);
+  document.addEventListener('touchcancel', clearPress);
+  document.addEventListener('touchmove', clearPress, { passive: true });
   $('#btnQuickTest').addEventListener('click', function () {
     closeSheets();
     runTest('latency');
