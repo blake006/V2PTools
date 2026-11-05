@@ -11,10 +11,34 @@ const DEFAULT_LATENCY_URLS = [
 ];
 
 const DEFAULT_IP_URLS = [
-  'http://ip.3322.net',
-  'http://icanhazip.com',
+  'https://icanhazip.com',
   'https://ipinfo.io/ip',
+  'https://api.ipify.org',
   'http://ip-api.com/line/?fields=query',
+  'http://ip.3322.net',
+];
+
+/**
+ * 自检专用：境外 + 境内混合。
+ * 境外优先（经代理时不会被「绕过大陆」规则误判直连），
+ * 境内兜底（纯国内网络环境下境外源可能全不可达）。
+ * 网关里给这些域名加了强制 PROXY 规则，所以走代理时即使境内源也能测出节点出口。
+ */
+const PROXY_CHECK_IP_URLS = [
+  'https://icanhazip.com',
+  'https://api.ipify.org',
+  'https://ipinfo.io/ip',
+  'https://ifconfig.me/ip',
+  'http://ip.3322.net',
+  'https://myip.ipip.net',
+];
+
+/** 直连测试：境内优先，保证国内网络也能测通 */
+const DIRECT_CHECK_IP_URLS = [
+  'http://ip.3322.net',
+  'https://myip.ipip.net',
+  'https://icanhazip.com',
+  'https://api.ipify.org',
 ];
 
 const SPEED_SOURCES = [
@@ -281,6 +305,8 @@ function testTcp(host, port, timeout = 4000) {
 }
 
 module.exports = {
+  PROXY_CHECK_IP_URLS,
+  DIRECT_CHECK_IP_URLS,
   requestThrough,
   requestDirect,
   testLatency,

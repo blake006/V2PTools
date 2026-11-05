@@ -5,5 +5,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('trafficApi', {
   onData: (cb) => ipcRenderer.on('traffic:data', (e, d) => cb(d)),
+  onTheme: (cb) => ipcRenderer.on('traffic:theme', (e, t) => cb(t)),
   close: () => ipcRenderer.send('traffic:close'),
 });

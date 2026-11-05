@@ -180,8 +180,8 @@ class Gateway {
 
     const rules =
       mode === 'bypass-cn'
-        ? ['RULE-SET,cn-domain,DIRECT', 'RULE-SET,cn-cidr,DIRECT', 'MATCH,PROXY']
-        : ['RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT'];
+        ? [...SELF_CHECK_RULES, 'RULE-SET,cn-domain,DIRECT', 'RULE-SET,cn-cidr,DIRECT', 'MATCH,PROXY']
+        : [...SELF_CHECK_RULES, 'RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT'];
     return { providers, rules };
   }
 

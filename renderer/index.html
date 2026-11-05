@@ -470,6 +470,15 @@ Surge / Loon 配置、Quantumult X 配置、Base64 订阅内容"></textarea>
           <label>取 IP 地址（每行一个，留空使用默认）</label>
           <textarea id="setIpUrls" class="textarea textarea-sm" spellcheck="false" placeholder="http://ip.3322.net"></textarea>
         </div>
+        <div class="group-title">数据管理</div>
+        <div class="data-actions">
+          <button class="btn btn-mini" id="btnBackup">备份配置</button>
+          <button class="btn btn-mini" id="btnRestore">从备份还原</button>
+        </div>
+        <button class="btn btn-mini danger" id="btnFactoryReset" style="width:100%">恢复出厂设置</button>
+        <p class="dim" style="font-size:11.5px;line-height:1.5;margin:2px 0 0">
+          备份会导出节点、订阅和全部设置；恢复出厂会清空这些数据（会先自动关闭代理）
+        </p>
         <div class="about" id="aboutBox"></div>
       </div>
       <div class="modal-foot">

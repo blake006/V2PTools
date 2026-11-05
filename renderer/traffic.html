@@ -13,8 +13,20 @@
     --down: #4f8cff;
     --ok: #4ade80;
   }
+
+  /* 明色主题：跟着主界面走 */
+  body.light {
+    --bg: #ffffff;
+    --line: rgba(0, 0, 0, 0.08);
+    --text: #1a1d23;
+    --dim: #5f6b7a;
+    --faint: #8b95a3;
+    --up: #e8871a;
+    --down: #2563eb;
+    --ok: #16a34a;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; background: #14171f; overflow: hidden; }
+  html, body { height: 100%; background: var(--bg); overflow: hidden; }
   body {
     font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
     -webkit-user-select: none; user-select: none;
@@ -23,13 +35,16 @@
 
   .card {
     position: relative; height: 100%; overflow: hidden;
-    background: #14171f;
+    background: var(--bg);
     display: flex; flex-direction: column;
   }
   /* 顶部一条极淡的渐变，纯色背景上也能有层次 */
   .card::before {
     content: ''; position: absolute; inset: 0 0 auto 0; height: 44px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent);
+  }
+  body.light .card::before {
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.035), transparent);
     pointer-events: none;
   }
 
@@ -43,6 +58,8 @@
   }
   .dot.on { animation: breathe 2.4s ease-in-out infinite; }
   .dot.off { background: #5b6473; box-shadow: none; animation: none; }
+  body.light .dot { box-shadow: 0 0 6px rgba(22, 163, 74, 0.45); }
+  body.light .dot.off { background: #c3c9d2; }
   @keyframes breathe {
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: .55; transform: scale(.86); }
@@ -196,6 +213,11 @@
 
     drawWave(d.history, on);
   });
+
+  // 跟随主界面的明暗主题
+  if (window.trafficApi.onTheme) {
+    window.trafficApi.onTheme((t) => document.body.classList.toggle('light', t === 'light'));
+  }
 
   $('#close').addEventListener('click', () => window.trafficApi.close());
 </script>

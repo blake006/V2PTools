@@ -2080,6 +2080,7 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
         ? '两个 IP 相同 → 流量可能没走代理（若节点出口和你在同一地区，相同属正常）'
         : '两个 IP 不同 → 代理已生效'
     );
+    lines.push('（自检域名已强制走代理，不会因分流规则被判直连）');
   }
   if (r.via && r.via.ok && r.https && !r.https.ok) {
     lines.push('');
@@ -2238,6 +2239,50 @@ $('#btnSettings').addEventListener('click', () => {
   openModal('settingsModal');
 });
 $('#btnSaveSettings').addEventListener('click', saveSettings);
+
+/* ---- 备份 / 还原 / 恢复出厂 ---- */
+
+$('#btnBackup').addEventListener('click', async () => {
+  const r = await window.api.backup();
+  if (r && r.ok) {
+    toast(`已备份 ${r.nodes} 个节点、${r.sources} 个订阅 → ${r.path}`, 'ok', 6000);
+  } else if (r && !r.canceled) {
+    toast('备份失败：' + (r.error || '未知原因'), 'err');
+  }
+});
+
+$('#btnRestore').addEventListener('click', async () => {
+  if (!confirm('还原会用备份文件覆盖当前的节点、订阅和设置。\n\n建议先「备份配置」留一份当前的。确定继续？')) return;
+  const r = await window.api.restore();
+  if (r && r.ok) {
+    toast(`已还原 ${r.nodes} 个节点、${r.sources} 个订阅，正在重新加载…`, 'ok', 4000);
+    setTimeout(() => location.reload(), 1000);
+  } else if (r && !r.canceled) {
+    toast('还原失败：' + (r.error || '未知原因'), 'err', 5000);
+  }
+});
+
+$('#btnFactoryReset').addEventListener('click', async () => {
+  const ok = confirm(
+    '恢复出厂设置会清空：\n\n· 全部节点\n· 全部订阅源\n· 所有设置（含列宽、列顺序、悬浮窗位置）\n\n此操作无法撤销，建议先「备份配置」。\n\n确定继续？'
+  );
+  if (!ok) return;
+  if (!confirm('最后确认一次：本地数据将被全部删除。')) return;
+
+  const r = await window.api.resetAll();
+  if (r && r.ok) {
+    try {
+      localStorage.removeItem('v2p.colwidths');
+      localStorage.removeItem('v2p.colorder');
+    } catch (e) {
+      /* 忽略 */
+    }
+    toast('已恢复出厂设置，正在重新加载…', 'ok', 3000);
+    setTimeout(() => location.reload(), 1000);
+  } else {
+    toast('操作失败：' + ((r && r.error) || '未知原因'), 'err');
+  }
+});
 
 $('#btnTheme').addEventListener('click', async () => {
   // 三态循环：深色 → 浅色 → 跟随系统
@@ -2604,6 +2649,48 @@ $('#tbody').addEventListener('contextmenu', (e) => {
  * 每个表头右侧一个手柄，拖动即可调列宽，结果存 localStorage。
  * 名称/服务器列内容长，默认宽度不够时用户能自己拉宽，不用改代码。
  */
+/**
+ * 列宽自适应：按这一列最宽的内容定宽（像 Excel 双击列边界）
+ * 上限 420px，避免某个超长字段把整张表撑开
+ */
+function autoFitColumn(th) {
+  const table = document.querySelector('table.grid');
+  if (!table || !th) return;
+  const key = colKey(th);
+  if (!key) return;
+
+  const cells = table.querySelectorAll('#tbody tr td[data-col="' + key + '"]');
+  // 表头文字本身也是内容的一部分
+  let max = th.scrollWidth;
+  cells.forEach((td) => {
+    if (!td.offsetParent) return; // 被筛选隐藏的行不参与
+    max = Math.max(max, td.scrollWidth);
+  });
+
+  const width = Math.max(56, Math.min(Math.ceil(max) + 8, 420));
+  th.style.width = width + 'px';
+
+  const idx = [...table.querySelector('thead tr').children].indexOf(th);
+  if (idx >= 0) {
+    let map = {};
+    try {
+      map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+    } catch (e) {
+      map = {};
+    }
+    map[idx] = width;
+    localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+  }
+}
+
+/** 全部列自适应 */
+function autoFitAllColumns() {
+  const table = document.querySelector('table.grid');
+  if (!table) return;
+  [...table.querySelectorAll('thead th')].forEach((th) => autoFitColumn(th));
+  toast('已按内容调整全部列宽', 'ok', 2000);
+}
+
 function enableColumnResize() {
   const table = document.querySelector('table.grid');
   if (!table) return;
@@ -2632,6 +2719,14 @@ function enableColumnResize() {
       const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
       delete map[i];
       localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+    });
+
+    // 双击分隔线 = 这一列按内容自适应；Shift + 双击 = 全部列
+    grip.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.shiftKey) autoFitAllColumns();
+      else autoFitColumn(th);
     });
 
     grip.addEventListener('mousedown', (e) => {

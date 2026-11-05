@@ -13,7 +13,7 @@ const { Runner } = require('./lib/runner');
 const clash = require('./lib/clash');
 const { SystemProxy, DEFAULT_BYPASS } = require('./lib/sysproxy');
 const { Gateway, DEFAULT_PORT, ROUTE_MODES } = require('./lib/gateway');
-const { fetchExitIP, requestThrough } = require('./lib/tester');
+const { fetchExitIP, requestThrough, PROXY_CHECK_IP_URLS, DIRECT_CHECK_IP_URLS } = require('./lib/tester');
 const { detectConflicts } = require('./lib/netcheck');
 const { buildSingBox } = require('./lib/exporters');
 const QRCode = require('qrcode');
@@ -282,7 +282,7 @@ function createTrafficWindow() {
     // Windows 上透明窗口做不出背景模糊（backdrop-filter 无效），
     // 还会把桌面图标透出来、CSS 阴影被窗口矩形裁成方形。改不透明实色。
     transparent: false,
-    backgroundColor: '#14171f',
+    backgroundColor: nativeTheme.themeSource === 'light' ? '#ffffff' : '#14171f',
     roundedCorners: true,
     resizable: false,
     alwaysOnTop: true,
@@ -303,7 +303,10 @@ function createTrafficWindow() {
 
   trafficWin = new BrowserWindow(opts);
   trafficWin.loadFile(path.join(__dirname, '..', 'renderer', 'traffic.html'));
-  trafficWin.once('ready-to-show', () => trafficWin.show());
+  trafficWin.once('ready-to-show', () => {
+    trafficWin.show();
+    trafficWin.webContents.send('traffic:theme', nativeTheme.themeSource === 'light' ? 'light' : 'dark');
+  });
   /* ---- 贴边收拢 / 悬停弹出 ---- */
   const PEEK = 6; // 收拢后留在屏幕内的宽度
   let dockEdge = null; // 'left' | 'right'
@@ -1115,6 +1118,73 @@ ipcMain.handle('export:singbox', async (e, payload) => {
   return { ok: true, path: r.filePath, count: built.count, skipped: built.skipped };
 });
 
+/* ------------------------------------------------------------------ */
+/* 备份 / 还原 / 恢复出厂                                               */
+/* ------------------------------------------------------------------ */
+
+/** 备份：把节点、订阅、设置打成一个 JSON，换机器/重装前存一份 */
+ipcMain.handle('data:backup', async () => {
+  const payload = {
+    app: 'V2PTools',
+    version: app.getVersion(),
+    exportedAt: new Date().toISOString(),
+    nodes: store.read('nodes.json', []),
+    sources: store.read('sources.json', []),
+    settings: store.read('settings.json', {}),
+  };
+  const r = await dialog.showSaveDialog(win, {
+    title: '备份配置',
+    defaultPath: 'v2ptools-backup-' + new Date().toISOString().slice(0, 10) + '.json',
+    filters: [{ name: 'V2PTools 备份', extensions: ['json'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+  fs.writeFileSync(r.filePath, JSON.stringify(payload, null, 2), 'utf8');
+  return { ok: true, path: r.filePath, nodes: payload.nodes.length, sources: payload.sources.length };
+});
+
+/** 还原：读备份覆盖当前数据，先停代理免得旧配置残留 */
+ipcMain.handle('data:restore', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    title: '选择备份文件',
+    properties: ['openFile'],
+    filters: [{ name: 'V2PTools 备份', extensions: ['json'] }],
+  });
+  if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(r.filePaths[0], 'utf8'));
+  } catch (err) {
+    return { ok: false, error: '文件不是合法 JSON' };
+  }
+  if (!data || !Array.isArray(data.nodes)) return { ok: false, error: '这不是 V2PTools 的备份文件' };
+
+  await disableSystemProxy().catch(() => {});
+  store.write('nodes.json', data.nodes);
+  if (Array.isArray(data.sources)) store.write('sources.json', data.sources);
+  if (data.settings && typeof data.settings === 'object') store.write('settings.json', data.settings);
+  sendProxyState();
+  return { ok: true, nodes: data.nodes.length, sources: (data.sources || []).length };
+});
+
+/** 恢复出厂：清空所有本地数据（节点 / 订阅 / 设置），并还原系统代理 */
+ipcMain.handle('data:reset', async () => {
+  await disableSystemProxy().catch(() => {});
+  store.write('nodes.json', []);
+  store.write('sources.json', []);
+  store.write('settings.json', {});
+  // 悬浮窗位置、列宽、列顺序这些界面痕迹也一并清掉
+  for (const f of ['trafficPos.json']) {
+    try {
+      fs.unlinkSync(store.file(f));
+    } catch (e) {
+      /* 不存在就算了 */
+    }
+  }
+  sendProxyState();
+  return { ok: true };
+});
+
 /** 导出为 Clash / mihomo 配置（YAML）—— 同步自 IPHealth 1.0.3 */
 ipcMain.handle('export:clash', async (e, payload) => {
   const { nodes, defaultName, opts } = payload || {};
@@ -1155,6 +1225,16 @@ ipcMain.handle('theme:set', (e, theme) => {
       });
     } catch (err) {}
     win.setBackgroundColor(light ? '#f5f7fb' : '#0e1015');
+  }
+
+  // 悬浮窗跟着主界面一起换色
+  if (trafficWin && !trafficWin.isDestroyed()) {
+    try {
+      trafficWin.setBackgroundColor(light ? '#ffffff' : '#14171f');
+      trafficWin.webContents.send('traffic:theme', light ? 'light' : 'dark');
+    } catch (err) {
+      /* 窗口正在销毁 */
+    }
   }
   return true;
 });
@@ -1279,9 +1359,9 @@ ipcMain.handle('proxy:check', async () => {
   const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
 
   const [direct, via, https, conflicts] = await Promise.all([
-    fetchExitIP(0, { timeout: 8000 }).catch((e) => ({ ok: false, error: e.message })),
+    fetchExitIP(0, { timeout: 8000, urls: DIRECT_CHECK_IP_URLS }).catch((e) => ({ ok: false, error: e.message })),
     gw.running
-      ? fetchExitIP(gw.port, { timeout: 12000 }).catch((e) => ({ ok: false, error: e.message }))
+      ? fetchExitIP(gw.port, { timeout: 12000, urls: PROXY_CHECK_IP_URLS }).catch((e) => ({ ok: false, error: e.message }))
       : Promise.resolve({ ok: false, error: '内核未运行' }),
     // 只测 HTTP 会误判：代理能过 HTTP 但 HTTPS（CONNECT）不通的情况真实存在，
     // 浏览器打不开网页恰恰是后者。测两个域名，任一通过即算通，

@@ -718,3 +718,9 @@ tr.in-use .row-act { opacity: 1; }
   position: fixed; width: 2px; display: none; z-index: 60;
   background: var(--accent); border-radius: 1px; pointer-events: none;
 }
+
+/* 数据管理 */
+.data-actions { display: flex; gap: 8px; }
+.data-actions .btn { flex: 1; }
+.btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
+.btn.danger:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); }
