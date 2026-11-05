@@ -2055,6 +2055,20 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   $('#statusText').textContent = '正在做链路自检…';
   const r = await window.api.proxyCheck();
   const lines = [];
+
+  /* ---------- 第一行直接给结论：模式 + 是否生效 ---------- */
+  const o = r.observed || { kind: 'off', text: '代理未运行' };
+  const conf = r.gateway.routeLabel || '';
+  const expectKind = conf.indexOf('全局') >= 0 ? 'global' : conf.indexOf('绕过') >= 0 ? 'bypass-cn' : 'mixed';
+  let verdict;
+  if (o.kind === 'off') verdict = '✗ 代理未运行';
+  else if (o.kind === 'broken') verdict = '✗ ' + o.text;
+  else if (o.kind === 'unknown') verdict = '⚠ ' + o.text;
+  else if (o.kind === expectKind) verdict = '✓ ' + o.text + '（与设置一致）';
+  else verdict = '⚠ 实际是「' + o.text + '」，但设置是「' + (conf || '未知') + '」';
+  lines.push(verdict);
+  lines.push('');
+
   // 系统代理是否真的指向本工具，比「有没有开」更重要
   const target = r.gateway.running ? '127.0.0.1:' + r.gateway.port : '';
   const pointsHere = !!(r.system.active && r.system.server && target && r.system.server === target);
@@ -2066,25 +2080,29 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
         : '系统代理：未开启'
   );
   lines.push(r.gateway.running
-    ? `内核：运行中，端口 ${r.gateway.port}（${r.gateway.routeLabel || '全局代理'}）`
+    ? `内核：运行中，端口 ${r.gateway.port}（${conf || '全局代理'}）`
     : '内核：未运行');
-  lines.push(r.via && r.via.ok ? `经代理出口：${r.via.ip}` : `经代理出口：失败（${(r.via && r.via.error) || '未开启'}）`);
+  lines.push(r.via && r.via.ok ? `节点出口：${r.via.ip}` : `节点出口：失败（${(r.via && r.via.error) || '未开启'}）`);
+  lines.push(
+    r.viaDomestic && r.viaDomestic.ok
+      ? `国内出口：${r.viaDomestic.ip}（${r.via && r.via.ok && r.viaDomestic.ip === r.via.ip ? '也走节点' : '直连'}）`
+      : `国内出口：测不到（${(r.viaDomestic && r.viaDomestic.error) || '未开启'}）`
+  );
   lines.push(r.https && r.https.ok
     ? `HTTPS 经代理：通过（HTTP ${r.https.status}${r.https.ms ? ' · ' + r.https.ms + 'ms' : ''}）`
     : `HTTPS 经代理：失败（${(r.https && r.https.error) || '未开启'}）`);
   lines.push(
     r.direct && r.direct.ok
-      ? '本机出口：' + r.direct.ip + '（绕过代理直连测的，用来做对比）'
+      ? '本机出口：' + r.direct.ip + '（绕过代理直连测的）'
       : '本机出口：测不到（本机可能无外网，不影响代理使用）'
   );
   if (r.via && r.via.ok && r.direct && r.direct.ok) {
     lines.push('');
     lines.push(
       r.same
-        ? '两个 IP 相同 → 流量可能没走代理（若节点出口和你在同一地区，相同属正常）'
-        : '两个 IP 不同 → 代理已生效（浏览器访问 IP 查询应显示 ' + r.via.ip + '）'
+        ? '节点出口与本机相同 → 流量可能没走代理（若节点就在同地区，相同属正常）'
+        : '节点出口与本机不同 → 代理确实生效（浏览器访问 IP 查询应显示 ' + r.via.ip + '）'
     );
-    lines.push('（自检域名已强制走代理，不会因分流规则被判直连）');
   }
   if (r.via && r.via.ok && r.https && !r.https.ok) {
     lines.push('');
@@ -2097,7 +2115,17 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   }
   if (r.gateway.node) lines.push(`\n节点：${r.gateway.node.name}（${r.gateway.node.server}:${r.gateway.node.port}）`);
   alert(lines.join('\n'));
-  $('#statusText').textContent = r.same ? '自检：代理未生效' : r.via && r.via.ok ? '自检：代理已生效' : '自检：代理链路异常';
+  $('#statusText').textContent =
+    '自检：' +
+    (o.kind === 'global'
+      ? '全局已生效'
+      : o.kind === 'bypass-cn'
+        ? '绕过大陆已生效'
+        : o.kind === 'broken'
+          ? '代理未生效'
+          : o.kind === 'off'
+            ? '代理未运行'
+            : '待确认');
 });
 $('#proxyBadge').addEventListener('click', toggleSystemProxy);
 

@@ -54,6 +54,7 @@ check('IP 源常量已导出', () => {
   const t = require(path.join(ROOT, 'electron', 'lib', 'tester'));
   if (!Array.isArray(t.PROXY_CHECK_IP_URLS) || !t.PROXY_CHECK_IP_URLS.length) throw new Error('PROXY_CHECK_IP_URLS 缺失');
   if (!Array.isArray(t.DIRECT_CHECK_IP_URLS) || !t.DIRECT_CHECK_IP_URLS.length) throw new Error('DIRECT_CHECK_IP_URLS 缺失');
+  if (!Array.isArray(t.DOMESTIC_CHECK_IP_URLS) || !t.DOMESTIC_CHECK_IP_URLS.length) throw new Error('DOMESTIC_CHECK_IP_URLS 缺失');
 });
 
 // 3) 渲染层 / 主进程语法

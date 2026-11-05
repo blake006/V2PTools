@@ -1390,10 +1390,14 @@ ipcMain.handle('proxy:check', async () => {
   const gw = gateway ? gateway.status() : { running: false, port: 0, node: null };
   const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
 
-  const [direct, via, https, conflicts] = await Promise.all([
+  const [direct, via, viaDomestic, https, conflicts] = await Promise.all([
     fetchExitIP(0, { timeout: 8000, urls: DIRECT_CHECK_IP_URLS }).catch((e) => ({ ok: false, error: e.message })),
     gw.running
       ? fetchExitIP(gw.port, { timeout: 12000, urls: PROXY_CHECK_IP_URLS }).catch((e) => ({ ok: false, error: e.message }))
+      : Promise.resolve({ ok: false, error: '内核未运行' }),
+    // 国内域名走分流规则（没加白名单），用它反推「国内流量到底走没走节点」
+    gw.running
+      ? fetchExitIP(gw.port, { timeout: 10000, urls: DOMESTIC_CHECK_IP_URLS }).catch((e) => ({ ok: false, error: e.message }))
       : Promise.resolve({ ok: false, error: '内核未运行' }),
     // 只测 HTTP 会误判：代理能过 HTTP 但 HTTPS（CONNECT）不通的情况真实存在，
     // 浏览器打不开网页恰恰是后者。测两个域名，任一通过即算通，
@@ -1417,7 +1421,23 @@ ipcMain.handle('proxy:check', async () => {
     via,
     https,
     conflicts,
+    viaDomestic,
     same: !!(via && via.ok && direct && direct.ok && via.ip === direct.ip),
+    /**
+     * 用「国内流量的实际出口」反推当前模式，跟设置里的 routeMode 对比：
+     *   国内出口 = 节点 IP → 国内也走代理 = 全局
+     *   国内出口 = 本机 IP → 国内直连 = 绕过大陆
+     * 这样不用开浏览器就能确认模式到底有没有生效。
+     */
+    observed: (() => {
+      if (!gw.running || !via || !via.ok) return { kind: 'off', text: '代理未运行' };
+      const localIp = direct && direct.ok ? direct.ip : '';
+      if (localIp && via.ip === localIp) return { kind: 'broken', text: '代理未生效（出口仍是本机 IP）' };
+      if (!viaDomestic || !viaDomestic.ok) return { kind: 'unknown', text: '无法判断（国内探测失败）' };
+      if (viaDomestic.ip === via.ip) return { kind: 'global', text: '全局：国内流量也走节点' };
+      if (localIp && viaDomestic.ip === localIp) return { kind: 'bypass-cn', text: '绕过大陆：国内直连、国外走节点' };
+      return { kind: 'mixed', text: '规则分流：国内走了其它出口' };
+    })(),
   };
 });
 

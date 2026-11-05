@@ -19,19 +19,23 @@ const DEFAULT_IP_URLS = [
 ];
 
 /**
- * 自检专用：境外 + 境内混合。
- * 境外优先（经代理时不会被「绕过大陆」规则误判直连），
- * 境内兜底（纯国内网络环境下境外源可能全不可达）。
- * 网关里给这些域名加了强制 PROXY 规则，所以走代理时即使境内源也能测出节点出口。
+ * 自检专用（境外）：网关里给这些域名加了强制 PROXY 规则，
+ * 所以无论什么分流模式，走它测出来的都是节点出口。
  */
 const PROXY_CHECK_IP_URLS = [
   'https://icanhazip.com',
   'https://api.ipify.org',
   'https://ipinfo.io/ip',
   'https://ifconfig.me/ip',
-  'http://ip.3322.net',
-  'https://myip.ipip.net',
 ];
+
+/**
+ * 自检专用（国内）：**故意不加白名单**，让分流规则自己判断。
+ * 用它测出来的出口能反推模式：
+ *   出口 = 节点 IP → 国内流量也走代理 = 全局
+ *   出口 = 本机 IP → 国内直连 = 绕过大陆
+ */
+const DOMESTIC_CHECK_IP_URLS = ['https://myip.ipip.net', 'http://ip.3322.net'];
 
 /** 直连测试：境内优先，保证国内网络也能测通 */
 const DIRECT_CHECK_IP_URLS = [
@@ -306,6 +310,7 @@ function testTcp(host, port, timeout = 4000) {
 
 module.exports = {
   PROXY_CHECK_IP_URLS,
+  DOMESTIC_CHECK_IP_URLS,
   DIRECT_CHECK_IP_URLS,
   requestThrough,
   requestDirect,

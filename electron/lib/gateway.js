@@ -11,10 +11,12 @@
  */
 
 /**
- * 自检用的 IP 查询服务：强制走代理。
+ * 境外 IP 查询服务：强制走代理。
  * 否则「绕过大陆」模式会把这些域名判成直连，自检测出来的还是本机 IP，
  * 看起来就像「代理没生效」——这是之前自检结果与实际不一致的根源。
- * 注意：这些规则必须排在 RULE-SET 之前，否则会被 cn-domain 里的 DIRECT 抢先命中。
+ *
+ * 注意：这里**只放境外域名**。国内域名必须留给分流规则自己判断，
+ * 否则「国内流量走没走代理」这个信息就没了，也就分不出全局 / 绕过大陆。
  */
 const SELF_CHECK_RULES = [
   'DOMAIN,icanhazip.com,PROXY',
@@ -22,9 +24,6 @@ const SELF_CHECK_RULES = [
   'DOMAIN,ipinfo.io,PROXY',
   'DOMAIN,ifconfig.me,PROXY',
   'DOMAIN,ip-api.com,PROXY',
-  'DOMAIN,ip.3322.net,PROXY',
-  'DOMAIN,myip.ipip.net,PROXY',
-  'DOMAIN,ip.cn,PROXY',
 ];
 
 const { spawn } = require('child_process');
