@@ -10,6 +10,23 @@
  * 与检测内核完全隔离：检测任务会反复重启自己的内核，不会影响正在使用的系统代理。
  */
 
+/**
+ * 自检用的 IP 查询服务：强制走代理。
+ * 否则「绕过大陆」模式会把这些域名判成直连，自检测出来的还是本机 IP，
+ * 看起来就像「代理没生效」——这是之前自检结果与实际不一致的根源。
+ * 注意：这些规则必须排在 RULE-SET 之前，否则会被 cn-domain 里的 DIRECT 抢先命中。
+ */
+const SELF_CHECK_RULES = [
+  'DOMAIN,icanhazip.com,PROXY',
+  'DOMAIN-SUFFIX,ipify.org,PROXY',
+  'DOMAIN,ipinfo.io,PROXY',
+  'DOMAIN,ifconfig.me,PROXY',
+  'DOMAIN,ip-api.com,PROXY',
+  'DOMAIN,ip.3322.net,PROXY',
+  'DOMAIN,myip.ipip.net,PROXY',
+  'DOMAIN,ip.cn,PROXY',
+];
+
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
