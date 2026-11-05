@@ -1434,9 +1434,17 @@ ipcMain.handle('proxy:check', async () => {
       const localIp = direct && direct.ok ? direct.ip : '';
       if (localIp && via.ip === localIp) return { kind: 'broken', text: '代理未生效（出口仍是本机 IP）' };
       if (!viaDomestic || !viaDomestic.ok) return { kind: 'unknown', text: '无法判断（国内探测失败）' };
-      if (viaDomestic.ip === via.ip) return { kind: 'global', text: '全局：国内流量也走节点' };
-      if (localIp && viaDomestic.ip === localIp) return { kind: 'bypass-cn', text: '绕过大陆：国内直连、国外走节点' };
-      return { kind: 'mixed', text: '规则分流：国内走了其它出口' };
+
+      // 关键看「国内流量有没有直连」，而不是出口 IP 是否和节点完全相等：
+      // 有的节点多出口 / 走 WARP 中转，访问国内和国外拿到的出口 IP 本来就不一样。
+      if (localIp && viaDomestic.ip === localIp) {
+        return { kind: 'bypass-cn', text: '绕过大陆：国内直连、国外走节点' };
+      }
+      if (viaDomestic.ip === via.ip) {
+        return { kind: 'global', text: '全局：国内流量也走节点' };
+      }
+      // 既不是本机也不是节点出口 → 国内确实走了代理，只是出口不同
+      return { kind: 'global', text: '全局：国内流量也走代理（出口 ' + viaDomestic.ip + '，与节点出口不同）' };
     })(),
   };
 });

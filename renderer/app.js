@@ -2070,7 +2070,8 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   if (o.kind === 'off') verdict = '✗ 代理未运行';
   else if (o.kind === 'broken') verdict = '✗ ' + o.text;
   else if (o.kind === 'unknown') verdict = '⚠ ' + o.text;
-  else if (o.kind === expectKind) verdict = '✓ ' + o.text + '（与设置一致）';
+  else if (o.kind === expectKind || (expectKind === 'mixed' && o.kind === 'bypass-cn'))
+    verdict = '✓ ' + o.text + '（与设置一致）';
   else verdict = '⚠ 实际是「' + o.text + '」，但设置是「' + (conf || '未知') + '」';
   lines.push(verdict);
   lines.push('');
