@@ -1276,8 +1276,15 @@ async function runTest(mode, onlySelected, scope) {
     settings: state.settings,
   };
 
-  const res = await window.api.runTest(payload);
-  setRunning(false);
+  // 主进程抛错时也要把 running 复位，否则界面永远停在「检测中」
+  let res;
+  try {
+    res = await window.api.runTest(payload);
+  } catch (err) {
+    res = { error: '检测失败：' + ((err && err.message) || err) };
+  } finally {
+    setRunning(false);
+  }
   if (res && res.error) toast(res.error, 'err');
   else toast(`检测完成：${state.progress.finished}/${state.progress.total}`, 'ok');
   saveNodes();

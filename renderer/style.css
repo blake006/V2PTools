@@ -229,7 +229,7 @@ table.grid { width: 100%; min-width: 1280px; border-collapse: separate; border-s
   background: var(--accent); width: 2px; right: .5px;
 }
 /* 正在拖的那一列抬到最上层，免得被右侧列头压住 */
-.grid thead th.col-resizing { z-index: 20; }
+.grid thead th.col-resizing { z-index: 20; background: var(--accent-soft); }
 .grid thead th.sortable { cursor: pointer; }
 .grid thead th.sortable:hover { color: var(--text-dim); }
 .grid thead th.sorted { color: var(--accent); }
