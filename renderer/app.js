@@ -2573,6 +2573,8 @@ function openNodeMenu(id, x, y) {
       { label: '分享节点（查看链接）…', onClick: () => showShareLink(n) },
       { label: n.ip ? `复制出口 IP（${n.ip}）` : '复制出口 IP（未检测）', onClick: () => (n.ip ? window.api.copyText(n.ip).then(() => toast('已复制 ' + n.ip, 'ok')) : toast('还没有出口 IP，先检测一次', 'err')) },
       '-',
+      { label: '清除无效节点（检测失败的）', onClick: () => removeInvalidNodes() },
+      '-',
       {
         label: '仅检测此节点',
         onClick: () => {
@@ -2701,6 +2703,35 @@ function autoFitAllColumns() {
   toast('已按内容调整全部列宽', 'ok', 2000);
 }
 
+/** 一键清除检测失败的节点（订阅里的下次同步会回来） */
+async function removeInvalidNodes() {
+  const failed = state.nodes.filter((n) => n.status === 'fail');
+  if (!failed.length) return toast('没有检测失败的节点', 'ok', 2500);
+
+  const inUse = proxyInUseId();
+  const hitActive = failed.some((n) => n.id === inUse);
+  const tip =
+    `确定删除 ${failed.length} 个检测失败的节点？` +
+    (hitActive ? '\n\n注意：系统代理正在使用其中一个，会先关闭代理。' : '') +
+    '\n\n如果它们来自订阅，下次同步会重新出现。';
+  if (!confirm(tip)) return;
+
+  if (hitActive) {
+    try {
+      await window.api.proxyDisable();
+    } catch (e) {
+      /* 关不掉也继续删 */
+    }
+  }
+
+  const ids = new Set(failed.map((n) => n.id));
+  state.nodes = state.nodes.filter((n) => !ids.has(n.id));
+  for (const id of ids) state.selected.delete(id);
+  saveNodes();
+  renderTable();
+  toast(`已清除 ${failed.length} 个无效节点`, 'ok');
+}
+
 /** 恢复某一列的默认宽度 */
 function resetColumnWidth(th) {
   th.style.width = '';
@@ -2758,6 +2789,8 @@ function enableColumnResize() {
           '-',
           { label: '恢复此列默认宽度', onClick: () => resetColumnWidth(th) },
           { label: '恢复全部列默认宽度', onClick: () => resetAllColumnWidths() },
+          '-',
+          { label: '清除无效节点（检测失败的）', onClick: () => removeInvalidNodes() },
         ],
         e.clientX,
         e.clientY
