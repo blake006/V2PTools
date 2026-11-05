@@ -2072,13 +2072,17 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   lines.push(r.https && r.https.ok
     ? `HTTPS 经代理：通过（HTTP ${r.https.status}${r.https.ms ? ' · ' + r.https.ms + 'ms' : ''}）`
     : `HTTPS 经代理：失败（${(r.https && r.https.error) || '未开启'}）`);
-  lines.push(r.direct && r.direct.ok ? `直连出口：${r.direct.ip}` : '直连出口：失败（可能本机无外网）');
+  lines.push(
+    r.direct && r.direct.ok
+      ? '本机出口：' + r.direct.ip + '（绕过代理直连测的，用来做对比）'
+      : '本机出口：测不到（本机可能无外网，不影响代理使用）'
+  );
   if (r.via && r.via.ok && r.direct && r.direct.ok) {
     lines.push('');
     lines.push(
       r.same
         ? '两个 IP 相同 → 流量可能没走代理（若节点出口和你在同一地区，相同属正常）'
-        : '两个 IP 不同 → 代理已生效'
+        : '两个 IP 不同 → 代理已生效（浏览器访问 IP 查询应显示 ' + r.via.ip + '）'
     );
     lines.push('（自检域名已强制走代理，不会因分流规则被判直连）');
   }

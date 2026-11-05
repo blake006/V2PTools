@@ -309,16 +309,36 @@ function createTrafficWindow() {
   });
   /* ---- 贴边收拢 / 悬停弹出 ---- */
   const PEEK = 6; // 收拢后留在屏幕内的宽度
-  let dockEdge = null; // 'left' | 'right'
+  const SNAP = 40; // 距边缘多近算「贴边」
+  let dockEdge = null; // 'left' | 'right' | 'top' | 'bottom'
   let collapsed = false;
   let dockTimer = null;
   let leaveTimer = null;
+  let collapseTimer = null;
   let hovered = false;
   let snapGuard = false;
 
   const displayOf = (b) => screen.getDisplayMatching(b);
-  const expandedX = (edge, b, wa) => (edge === 'left' ? wa.x : wa.x + wa.width - b.width);
-  const collapsedX = (edge, b, wa) => (edge === 'left' ? wa.x - b.width + PEEK : wa.x + wa.width - PEEK);
+
+  /** 收拢后的位置：把窗口推出屏幕，只留 PEEK 像素露在外面 */
+  function collapsedBounds(edge, b, wa) {
+    const out = { x: b.x, y: b.y, width: b.width, height: b.height };
+    if (edge === 'left') out.x = wa.x - b.width + PEEK;
+    else if (edge === 'right') out.x = wa.x + wa.width - PEEK;
+    else if (edge === 'top') out.y = wa.y - b.height + PEEK;
+    else if (edge === 'bottom') out.y = wa.y + wa.height - PEEK;
+    return out;
+  }
+
+  /** 展开后的位置：贴齐边缘 */
+  function expandedBounds(edge, b, wa) {
+    const out = { x: b.x, y: b.y, width: b.width, height: b.height };
+    if (edge === 'left') out.x = wa.x;
+    else if (edge === 'right') out.x = wa.x + wa.width - b.width;
+    else if (edge === 'top') out.y = wa.y;
+    else if (edge === 'bottom') out.y = wa.y + wa.height - b.height;
+    return out;
+  }
 
   function setGuard(ms) {
     snapGuard = true;
@@ -327,13 +347,28 @@ function createTrafficWindow() {
     }, ms);
   }
 
+  function stopDockWatch() {
+    if (dockTimer) {
+      clearInterval(dockTimer);
+      dockTimer = null;
+    }
+    if (leaveTimer) {
+      clearTimeout(leaveTimer);
+      leaveTimer = null;
+    }
+    if (collapseTimer) {
+      clearTimeout(collapseTimer);
+      collapseTimer = null;
+    }
+  }
+
   function collapseNow() {
     if (!trafficWin || trafficWin.isDestroyed() || !dockEdge || collapsed) return;
     const b = trafficWin.getBounds();
     const wa = displayOf(b).workArea;
     collapsed = true;
-    setGuard(200);
-    trafficWin.setBounds({ x: collapsedX(dockEdge, b, wa), y: b.y, width: b.width, height: b.height });
+    setGuard(240);
+    trafficWin.setBounds(collapsedBounds(dockEdge, b, wa));
   }
 
   function expandNow() {
@@ -341,11 +376,22 @@ function createTrafficWindow() {
     const b = trafficWin.getBounds();
     const wa = displayOf(b).workArea;
     collapsed = false;
-    setGuard(200);
-    trafficWin.setBounds({ x: expandedX(dockEdge, b, wa), y: b.y, width: b.width, height: b.height });
+    setGuard(240);
+    trafficWin.setBounds(expandedBounds(dockEdge, b, wa));
   }
 
-  /** 每 150ms 看一眼鼠标：贴边时靠过去就弹，离开就收 */
+  /** 鼠标是否靠近「露在屏幕内那一条」 */
+  function nearDockEdge(p, b, wa) {
+    if (!dockEdge) return false;
+    const T = PEEK + 8; // 热区比露出宽度略大，划过就能弹
+    if (dockEdge === 'left') return p.x <= wa.x + T && p.y >= b.y && p.y <= b.y + b.height;
+    if (dockEdge === 'right') return p.x >= wa.x + wa.width - T && p.y >= b.y && p.y <= b.y + b.height;
+    if (dockEdge === 'top') return p.y <= wa.y + T && p.x >= b.x && p.x <= b.x + b.width;
+    if (dockEdge === 'bottom') return p.y >= wa.y + wa.height - T && p.x >= b.x && p.x <= b.x + b.width;
+    return false;
+  }
+
+  /** 每 150ms 看一眼鼠标：靠近就弹，离开就收 */
   function startDockWatch() {
     if (dockTimer) return;
     dockTimer = setInterval(() => {
@@ -353,30 +399,29 @@ function createTrafficWindow() {
       const p = screen.getCursorScreenPoint();
       const b = trafficWin.getBounds();
       const wa = displayOf(b).workArea;
-      const inY = p.y >= b.y && p.y <= b.y + b.height;
 
       if (collapsed) {
-        const nearX = dockEdge === 'left' ? p.x <= wa.x + PEEK + 3 : p.x >= wa.x + wa.width - PEEK - 3;
-        if (inY && nearX) {
+        if (nearDockEdge(p, b, wa)) {
           hovered = true;
           expandNow();
         }
-      } else {
-        const inside = p.x >= b.x && p.x <= b.x + b.width && inY;
-        if (inside) {
-          hovered = true;
-          if (leaveTimer) {
-            clearTimeout(leaveTimer);
-            leaveTimer = null;
-          }
-        } else if (hovered && !leaveTimer) {
-          // 鼠标移开一会儿再收，避免手抖就收回去
-          leaveTimer = setTimeout(() => {
-            leaveTimer = null;
-            hovered = false;
-            collapseNow();
-          }, 700);
+        return;
+      }
+
+      const inside = p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
+      if (inside) {
+        hovered = true;
+        if (leaveTimer) {
+          clearTimeout(leaveTimer);
+          leaveTimer = null;
         }
+      } else if (hovered && !leaveTimer) {
+        // 移开一会儿再收，避免手一抖就缩回去
+        leaveTimer = setTimeout(() => {
+          leaveTimer = null;
+          hovered = false;
+          collapseNow();
+        }, 650);
       }
     }, 150);
   }
@@ -386,60 +431,47 @@ function createTrafficWindow() {
     const [x, y] = trafficWin.getPosition();
     const [w, h] = trafficWin.getSize();
     const b = { x, y, width: w, height: h };
+    const wa = displayOf(b).workArea;
 
-    const display = screen.getDisplayMatching(b);
-    const wa = display.workArea;
-    const SNAP = 24;
-    let nx = x;
-    let ny = y;
+    // 用「到边或越界」判断，而不是绝对距离：
+    // 窗口被拖出屏幕一半时 x 已经是负数，Math.abs(x - wa.x) 会大于阈值，就判不出来了
     let edge = null;
+    if (x <= wa.x + SNAP) edge = 'left';
+    else if (x + w >= wa.x + wa.width - SNAP) edge = 'right';
+    else if (y <= wa.y + SNAP) edge = 'top';
+    else if (y + h >= wa.y + wa.height - SNAP) edge = 'bottom';
 
-    if (Math.abs(x - wa.x) <= SNAP) {
-      nx = wa.x;
-      edge = 'left';
-    } else if (Math.abs(wa.x + wa.width - (x + w)) <= SNAP) {
-      nx = wa.x + wa.width - w;
-      edge = 'right';
-    }
-    if (Math.abs(y - wa.y) <= SNAP) ny = wa.y;
-    else if (Math.abs(wa.y + wa.height - (y + h)) <= SNAP) ny = wa.y + wa.height - h;
-
-    const moved = nx !== x || ny !== y;
-    if (moved) {
-      setGuard(200);
-      trafficWin.setBounds({ x: nx, y: ny, width: w, height: h });
-    }
-
-    if (edge !== dockEdge || collapsed) {
-      // 换边或被拖出来了：先复位成展开状态
-      dockEdge = edge;
-      collapsed = false;
-      if (dockTimer) {
-        clearInterval(dockTimer);
-        dockTimer = null;
+    if (!edge) {
+      // 拖回屏幕中间：解除停靠
+      if (dockEdge) {
+        stopDockWatch();
+        dockEdge = null;
+        collapsed = false;
+        hovered = false;
       }
-      if (leaveTimer) {
-        clearTimeout(leaveTimer);
-        leaveTimer = null;
-      }
-      hovered = false;
+      store.write('trafficPos.json', { x, y });
+      return;
     }
 
-    if (edge) {
-      // 贴住侧边后稍等一下再收，让人看清贴到了
-      if (!dockTimer) startDockWatch();
-      setTimeout(() => {
-        if (dockEdge === edge && !hovered) collapseNow();
-      }, 500);
-    }
+    // 先贴齐（四边都贴）
+    const eb = expandedBounds(edge, b, wa);
+    dockEdge = edge;
+    collapsed = false;
+    hovered = false;
+    setGuard(240);
+    trafficWin.setBounds(eb);
+    store.write('trafficPos.json', { x: eb.x, y: eb.y });
 
-    store.write('trafficPos.json', { x: nx, y: ny });
+    // 停一下再收进去，让人看清「贴上了」
+    if (!dockTimer) startDockWatch();
+    if (collapseTimer) clearTimeout(collapseTimer);
+    collapseTimer = setTimeout(() => {
+      collapseTimer = null;
+      if (dockEdge === edge && !hovered) collapseNow();
+    }, 600);
   });
   trafficWin.on('closed', () => {
-    if (dockTimer) clearInterval(dockTimer);
-    if (leaveTimer) clearTimeout(leaveTimer);
-    dockTimer = null;
-    leaveTimer = null;
+    stopDockWatch();
     trafficWin = null;
     stopTrafficLoop();
   });
