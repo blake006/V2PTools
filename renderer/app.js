@@ -1654,6 +1654,13 @@ async function enableSystemProxyById(id, mode) {
         toast('检测到 ' + c.summary + '。只要代理正常可以忽略，本次不再提示', 'warn', 6000);
       }
     }
+    // 全局模式下国内网站/本地服务也会走节点，容易变慢或报错，提醒一次
+    if (state.settings.routeMode === 'global' && !sessionStorage.getItem('v2p.globalTip')) {
+      sessionStorage.setItem('v2p.globalTip', '1');
+      setTimeout(() => {
+        toast('全局模式：国内网站也会走节点。如果某些软件连不上（如本地服务、国内 API），切「绕过大陆」试试', 'warn', 9000);
+      }, 1200);
+    }
     // 后台校验真实出口 IP
     window.api.proxyProbe().then((r) => {
       if (r && r.ok) toast(`链路可用，出口 IP ${r.ip}`, 'ok');

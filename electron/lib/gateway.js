@@ -237,6 +237,15 @@ class Gateway {
             'dns-hijack': ['any:53'],
             // strict-route 会在路由表里插更高优先级的规则，容易和别的 VPN 打架
             'strict-route': false,
+            // 排除回环与私有网段：否则访问打印机 / NAS / 路由器这些内网设备
+            // 也会被塞进 TUN，表现就是「开了代理内网就不通了」
+            'route-exclude-address': [
+              '127.0.0.0/8',
+              '10.0.0.0/8',
+              '172.16.0.0/12',
+              '192.168.0.0/16',
+              '169.254.0.0/16',
+            ],
             mtu: 1500,
           }
         : { enable: false },
@@ -250,6 +259,10 @@ class Gateway {
         'fake-ip-filter': [
           '*.lan',
           '*.local',
+          '*.localhost',
+          '*.internal',
+          '*.home.arpa',
+          'localhost.*',
           'localhost.ptlogin2.qq.com',
           '+.msftconnecttest.com',
           '+.msftncsi.com',
