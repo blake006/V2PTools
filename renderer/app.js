@@ -2128,7 +2128,28 @@ function bindFilterUI() {
 
   $('#btnGroupMenu').addEventListener('click', (e) => {
     e.stopPropagation();
-    $('#groupMenu').classList.toggle('open');
+    const menu = $('#groupMenu');
+    const open = menu.classList.toggle('open');
+    if (!open) return;
+
+    // 侧栏有 overflow:auto，菜单又是 absolute + 208px 宽（比侧栏还宽），
+    // 左边会被裁掉。改成 fixed 定位并按视口边界收一下。
+    menu.style.position = 'fixed';
+    menu.style.right = 'auto';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+
+    const r = e.currentTarget.getBoundingClientRect();
+    const mw = menu.offsetWidth;
+    const mh = menu.offsetHeight;
+
+    let left = r.right - mw; // 优先和按钮右对齐
+    if (left < 8) left = Math.min(r.left, window.innerWidth - mw - 8);
+    let top = r.bottom + 6;
+    if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+
+    menu.style.left = Math.max(8, left) + 'px';
+    menu.style.top = top + 'px';
   });
   $$('#groupMenu button').forEach((b) => {
     b.addEventListener('click', () => {
