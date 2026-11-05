@@ -2262,6 +2262,17 @@ $('#btnRestore').addEventListener('click', async () => {
   }
 });
 
+$('#btnResetColumns').addEventListener('click', () => {
+  try {
+    localStorage.removeItem('v2p.colwidths');
+    localStorage.removeItem('v2p.colorder');
+  } catch (e) {
+    /* 忽略 */
+  }
+  toast('已恢复默认列宽与列顺序，正在重新加载…', 'ok', 2500);
+  setTimeout(() => location.reload(), 800);
+});
+
 $('#btnFactoryReset').addEventListener('click', async () => {
   const ok = confirm(
     '恢复出厂设置会清空：\n\n· 全部节点\n· 全部订阅源\n· 所有设置（含列宽、列顺序、悬浮窗位置）\n\n此操作无法撤销，建议先「备份配置」。\n\n确定继续？'
@@ -2670,15 +2681,14 @@ function autoFitColumn(th) {
   const width = Math.max(56, Math.min(Math.ceil(max) + 8, 420));
   th.style.width = width + 'px';
 
-  const idx = [...table.querySelector('thead tr').children].indexOf(th);
-  if (idx >= 0) {
+  if (key) {
     let map = {};
     try {
       map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
     } catch (e) {
       map = {};
     }
-    map[idx] = width;
+    map[key] = width;
     localStorage.setItem('v2p.colwidths', JSON.stringify(map));
   }
 }
@@ -2701,30 +2711,36 @@ function enableColumnResize() {
   } catch (e) {
     saved = {};
   }
+  // 旧格式按列索引存（{0:120,1:40}），列顺序一拖就错配，
+  // 会把别的列的宽度套过来，看起来像「少了一列」。直接丢弃重来。
+  if (Object.keys(saved).some((k) => /^\d+$/.test(k))) {
+    saved = {};
+    localStorage.removeItem('v2p.colwidths');
+  }
 
-  ths.forEach((th, i) => {
+  ths.forEach((th) => {
     // 复选框、状态点、操作列不给拖
     if (th.classList.contains('col-check') || th.classList.contains('col-status') || th.classList.contains('col-act')) return;
-    if (saved[i]) th.style.width = saved[i] + 'px';
+    const key = colKey(th);
+    if (key && saved[key]) th.style.width = saved[key] + 'px';
     if (th.querySelector('.col-resizer')) return;
 
     const grip = document.createElement('span');
     grip.className = 'col-resizer';
-    grip.title = '拖动调整列宽（双击恢复默认）';
+    grip.title = '拖动调整列宽 · 双击按内容自适应 · Shift+双击全部自适应 · Alt+双击恢复默认';
     th.appendChild(grip);
 
-    grip.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      th.style.width = '';
-      const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
-      delete map[i];
-      localStorage.setItem('v2p.colwidths', JSON.stringify(map));
-    });
-
-    // 双击分隔线 = 这一列按内容自适应；Shift + 双击 = 全部列
+    // 双击分隔线 = 这一列按内容自适应；Shift = 全部；Alt = 恢复默认
     grip.addEventListener('dblclick', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (e.altKey) {
+        th.style.width = '';
+        const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+        delete map[key];
+        localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+        return;
+      }
       if (e.shiftKey) autoFitAllColumns();
       else autoFitColumn(th);
     });
@@ -2747,7 +2763,8 @@ function enableColumnResize() {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
-        map[i] = Math.round(th.getBoundingClientRect().width);
+        const k = colKey(th);
+        if (k) map[k] = Math.round(th.getBoundingClientRect().width);
         localStorage.setItem('v2p.colwidths', JSON.stringify(map));
       };
       document.addEventListener('mousemove', onMove);
