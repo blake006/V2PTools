@@ -205,7 +205,7 @@ svg { width: 16px; height: 16px; flex: none; }
 .table-scroll::-webkit-scrollbar-thumb:hover { background: #3a4457; }
 .table-scroll::-webkit-scrollbar-track { background: transparent; }
 
-table.grid { width: 100%; min-width: 1180px; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+table.grid { width: 100%; min-width: 1280px; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 .grid thead th {
   position: sticky; top: 0; z-index: 5;
   background: var(--bg-elev-2);
@@ -248,14 +248,14 @@ table.grid { width: 100%; min-width: 1180px; border-collapse: separate; border-s
 
 .col-check { width: 38px; }
 .col-status { width: 26px; }
-.col-name { width: auto; min-width: 170px; }
-.col-server { width: 210px; }
-.col-num { width: 82px; text-align: right !important; }
-.col-ip { width: 132px; }
-.col-loc { width: 138px; }
-.col-isp { width: 150px; }
-.col-iptype { width: 84px; }
-.col-health { width: 118px; }
+.col-name { width: 180px; }
+.col-server { width: 160px; }
+.col-num { width: 78px; text-align: right !important; }
+.col-ip { width: 120px; }
+.col-loc { width: 120px; }
+.col-isp { width: 115px; }
+.col-iptype { width: 76px; }
+.col-health { width: 100px; }
 .col-act { width: 62px; }
 
 input[type='checkbox'] {

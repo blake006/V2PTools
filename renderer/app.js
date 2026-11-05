@@ -2053,7 +2053,13 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
   e.stopPropagation();
   $('#proxyMenu').classList.remove('open');
   $('#statusText').textContent = '正在做链路自检…';
-  const r = await window.api.proxyCheck();
+  let r;
+  try {
+    r = await window.api.proxyCheck();
+  } catch (err) {
+    $('#statusText').textContent = '自检失败';
+    return toast('自检失败：' + ((err && err.message) || err), 'err', 6000);
+  }
   const lines = [];
 
   /* ---------- 第一行直接给结论：模式 + 是否生效 ---------- */
@@ -2746,6 +2752,30 @@ function autoFitColumn(th) {
     map[key] = width;
     localStorage.setItem('v2p.colwidths', JSON.stringify(map));
   }
+  clampTableWidth();
+}
+
+/**
+ * 列宽总和超出容器时等比压缩。
+ * table-layout: fixed 下，各列 width 之和大于表格宽度时浏览器会按比例硬压，
+ * min-width 不保证生效——名称列就这么被压成过 0 宽，整列消失。
+ */
+function clampTableWidth() {
+  const table = document.querySelector('table.grid');
+  if (!table) return;
+  const ths = [...table.querySelectorAll('thead th')];
+  if (!ths.length) return;
+
+  const avail = table.getBoundingClientRect().width;
+  const total = ths.reduce((sum, th) => sum + th.getBoundingClientRect().width, 0);
+  if (!avail || total <= avail + 1) return;
+
+  const ratio = avail / total;
+  ths.forEach((th) => {
+    const w = th.getBoundingClientRect().width;
+    if (w <= 60) return;
+    th.style.width = Math.max(56, Math.floor(w * ratio)) + 'px';
+  });
 }
 
 /** 全部列自适应 */
@@ -2824,7 +2854,7 @@ function enableColumnResize() {
     // 复选框、状态点、操作列不给拖
     if (th.classList.contains('col-check') || th.classList.contains('col-status') || th.classList.contains('col-act')) return;
     const key = colKey(th);
-    if (key && saved[key]) th.style.width = saved[key] + 'px';
+    if (key && Number(saved[key]) >= 40) th.style.width = saved[key] + 'px';
     if (th.querySelector('.col-resizer')) return;
 
     const grip = document.createElement('span');
@@ -2883,6 +2913,7 @@ function enableColumnResize() {
         const k = colKey(th);
         if (k) map[k] = Math.round(th.getBoundingClientRect().width);
         localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+        clampTableWidth();
       };
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);

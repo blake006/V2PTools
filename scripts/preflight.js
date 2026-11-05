@@ -57,7 +57,18 @@ check('IP 源常量已导出', () => {
   if (!Array.isArray(t.DOMESTIC_CHECK_IP_URLS) || !t.DOMESTIC_CHECK_IP_URLS.length) throw new Error('DOMESTIC_CHECK_IP_URLS 缺失');
 });
 
-// 3) 渲染层 / 主进程语法
+// 3) 主进程里引用的 tester 常量必须都导入（之前漏过 DOMESTIC_CHECK_IP_URLS）
+check('主进程常量引用齐全', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(path.join(ROOT, 'electron', 'main.js'), 'utf8');
+  const m = src.match(/const \{([^}]+)\} = require\('\.\/lib\/tester'\)/);
+  const imported = new Set((m ? m[1] : '').split(',').map((s) => s.trim()));
+  for (const key of ['PROXY_CHECK_IP_URLS', 'DIRECT_CHECK_IP_URLS', 'DOMESTIC_CHECK_IP_URLS']) {
+    if (src.includes(key) && !imported.has(key)) throw new Error('main.js 引用了 ' + key + ' 但没导入');
+  }
+});
+
+// 4) 渲染层 / 主进程语法
 const { execFileSync } = require('child_process');
 for (const f of ['renderer/app.js', 'electron/main.js', 'electron/preload.js', 'electron/preload-traffic.js']) {
   check('语法 ' + f, () => {
