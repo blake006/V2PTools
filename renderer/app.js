@@ -2701,6 +2701,24 @@ function autoFitAllColumns() {
   toast('已按内容调整全部列宽', 'ok', 2000);
 }
 
+/** 恢复某一列的默认宽度 */
+function resetColumnWidth(th) {
+  th.style.width = '';
+  const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+  const k = colKey(th);
+  if (k) delete map[k];
+  localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+}
+
+/** 恢复全部列的默认宽度 */
+function resetAllColumnWidths() {
+  document.querySelectorAll('table.grid thead th').forEach((th) => {
+    th.style.width = '';
+  });
+  localStorage.removeItem('v2p.colwidths');
+  toast('已恢复默认列宽', 'ok', 2000);
+}
+
 function enableColumnResize() {
   const table = document.querySelector('table.grid');
   if (!table) return;
@@ -2730,15 +2748,28 @@ function enableColumnResize() {
     grip.title = '拖动调整列宽 · 双击按内容自适应 · Shift+双击全部自适应 · Alt+双击恢复默认';
     th.appendChild(grip);
 
+    // 表头右键菜单：不用精确双击也能调，命中区域大得多
+    th.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(
+        [
+          { label: '按内容自适应此列', onClick: () => autoFitColumn(th) },
+          { label: '全部列按内容自适应', onClick: () => autoFitAllColumns() },
+          '-',
+          { label: '恢复此列默认宽度', onClick: () => resetColumnWidth(th) },
+          { label: '恢复全部列默认宽度', onClick: () => resetAllColumnWidths() },
+        ],
+        e.clientX,
+        e.clientY
+      );
+    });
+
     // 双击分隔线 = 这一列按内容自适应；Shift = 全部；Alt = 恢复默认
     grip.addEventListener('dblclick', (e) => {
       e.preventDefault();
       e.stopPropagation();
       if (e.altKey) {
-        th.style.width = '';
-        const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
-        delete map[key];
-        localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+        resetColumnWidth(th);
         return;
       }
       if (e.shiftKey) autoFitAllColumns();

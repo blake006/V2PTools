@@ -224,6 +224,7 @@ table.grid { width: 100%; min-width: 1180px; border-collapse: separate; border-s
   content: ''; position: absolute; right: 1px; top: 28%; width: 1px; height: 44%;
   background: var(--border); transition: background .12s, width .12s;
 }
+.col-resizer:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .col-resizer:hover::after, .col-resizer.dragging::after {
   background: var(--accent); width: 2px; right: .5px;
 }
