@@ -1906,18 +1906,8 @@ document.addEventListener('click', (e) => {
   // 关闭弹窗
   const closer = t.closest('[data-close]');
   if (closer) closeModal(closer.dataset.close);
-  // 遮罩关闭用坐标判断：只有点在弹窗矩形之外才算「点了空白」。
-  // 光看 target 不行 —— 在输入框里按下、鼠标移出去松开时 target 也会变成遮罩；
-  // 光看 mousedown 又会在某些情况下判不出来。
-  if (t.classList && t.classList.contains('modal-mask')) {
-    const modal = t.querySelector('.modal');
-    let outside = true;
-    if (modal) {
-      const r = modal.getBoundingClientRect();
-      outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-    }
-    if (outside) t.classList.remove('open');
-  }
+  // 点遮罩空白不关闭：只能点右上角 × 或「取消」。
+  // （之前点外面就关，输入到一半容易误触丢内容）
 
   // 菜单
   if (!t.closest('.btn-group')) $('#testMenu').classList.remove('open');

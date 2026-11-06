@@ -68,6 +68,19 @@ check('主进程常量引用齐全', () => {
   }
 });
 
+// 3.5) 打包资源必须覆盖内核与规则（1.3.9 漏过内核）
+check('打包资源覆盖内核与规则', () => {
+  const pkg = require(path.join(ROOT, 'package.json'));
+  const res = (pkg.build && pkg.build.extraResources) || [];
+  const froms = res.map((r) => r.from);
+  for (const need of ['vendor/mihomo.exe', 'assets/rules']) {
+    if (!froms.includes(need)) throw new Error('extraResources 缺少 ' + need);
+  }
+  const fsx = require('fs');
+  if (!fsx.existsSync(path.join(ROOT, 'vendor', 'mihomo.exe'))) throw new Error('vendor/mihomo.exe 不存在');
+  if (!fsx.existsSync(path.join(ROOT, 'assets', 'rules', 'cn-domain.yaml'))) throw new Error('assets/rules/cn-domain.yaml 不存在');
+});
+
 // 4) 渲染层 / 主进程语法
 const { execFileSync } = require('child_process');
 for (const f of ['renderer/app.js', 'electron/main.js', 'electron/preload.js', 'electron/preload-traffic.js']) {
