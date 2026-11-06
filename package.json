@@ -1,7 +1,7 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.3.9",
+  "version": "1.3.10",
   "description": "V2PTools",
   "main": "electron/main.js",
   "author": {
@@ -59,6 +59,10 @@
       {
         "from": "assets/rules",
         "to": "rules"
+      },
+      {
+        "from": "vendor/mihomo.exe",
+        "to": "core/mihomo.exe"
       }
     ],
     "win": {
