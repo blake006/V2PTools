@@ -1,7 +1,7 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "description": "V2PTools",
   "main": "electron/main.js",
   "author": {
@@ -57,19 +57,8 @@
     ],
     "extraResources": [
       {
-        "from": "vendor/mihomo.exe",
-        "to": "core/mihomo.exe"
-      },
-      {
         "from": "assets/rules",
-        "to": "rules",
-        "filter": [
-          "*.yaml"
-        ]
-      },
-      {
-        "from": "vendor/wintun.dll",
-        "to": "core/wintun.dll"
+        "to": "rules"
       }
     ],
     "win": {

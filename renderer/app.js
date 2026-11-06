@@ -1147,9 +1147,13 @@ async function doImport() {
       const res = await window.api.fetchSubscription(url);
       if (!res.nodes.length) {
         $('#subResult').className = 'sub-result err';
-        $('#subResult').textContent = res.errors && res.errors.length
-          ? '订阅内容无法解析：' + res.errors[0].error
-          : '订阅内容中未找到可识别的节点';
+        const raw = res.errors && res.errors.length ? String(res.errors[0].error || '') : '';
+        // 主进程会把「直连失败 + 代理失败 + 是否自动借用」拼成一大段，读起来很累。
+        // 这里只留结论和一条能立刻试的建议。
+        const connFail = /连接失败|拉取失败|ECONN|ETIMEDOUT|ENOTFOUND|解析到/.test(raw);
+        $('#subResult').textContent = connFail
+          ? '订阅拉取失败：这个地址直连和走代理都连不上。\n建议先确认链接是否还有效——用浏览器打开，能下载就把内容复制到「批量链接」导入；打不开说明链接已过期或被墙。'
+          : raw || '订阅内容中未找到可识别的节点';
         return;
       }
       const added = mergeNodes(res.nodes);
