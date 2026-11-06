@@ -1900,13 +1900,24 @@ async function init() {
 /* 事件绑定                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 记住鼠标按下时落在哪个元素上。
+ * 遮罩关闭必须「按下」和「松开」都在遮罩本身才算数——
+ * 否则在输入框里按下、鼠标稍微移出去松开（选文字、拖 textarea 右下角调高度），
+ * click 的 target 会变成共同祖先（也就是遮罩），弹窗就被误关了。
+ */
+let maskMouseDown = null;
+document.addEventListener('mousedown', (e) => { maskMouseDown = e.target; }, true);
+
 document.addEventListener('click', (e) => {
   const t = e.target;
 
   // 关闭弹窗
   const closer = t.closest('[data-close]');
   if (closer) closeModal(closer.dataset.close);
-  if (t.classList && t.classList.contains('modal-mask')) t.classList.remove('open');
+  if (t.classList && t.classList.contains('modal-mask') && maskMouseDown === t) {
+    t.classList.remove('open');
+  }
 
   // 菜单
   if (!t.closest('.btn-group')) $('#testMenu').classList.remove('open');

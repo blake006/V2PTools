@@ -315,15 +315,14 @@
       </div>
       <div class="modal-body">
         <div class="tab-pane active" data-pane="batch">
-          <textarea id="batchInput" class="textarea" spellcheck="false" placeholder="每行一条，支持：
-vmess://  vless://  trojan://  ss://  ssr://  hysteria2://  tuic://  anytls://
-socks5://user:pass@host:port   http://host:port
-host:port   或   host:port:user:pass
-也可以整段粘贴：Clash / Clash.Meta YAML、sing-box JSON、SIP008、
-Surge / Loon 配置、Quantumult X 配置、Base64 订阅内容"></textarea>
+          <textarea id="batchInput" class="textarea" spellcheck="false" placeholder="在这里粘贴，每行一条链接，或整段粘贴配置文件…"></textarea>
           <div class="hint-row">
             <span>自动识别格式：Clash YAML · sing-box JSON · SIP008 · Surge · Quantumult X · Base64 · 链接列表</span>
             <span id="batchCount" class="counter">0 行</span>
+          </div>
+          <div class="hint-block">
+            支持协议：vmess / vless / trojan / ss / ssr / hysteria2 / tuic / anytls / socks5 / http；也认
+            <code>host:port</code> 与 <code>host:port:user:pass</code> 这种简写
           </div>
         </div>
 

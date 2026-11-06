@@ -725,3 +725,7 @@ tr.in-use .row-act { opacity: 1; }
 .data-actions .btn { flex: 1; }
 .btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
 .btn.danger:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+
+/* 输入框下方的常驻说明：长说明不要塞进 placeholder，一点击就消失，看着像出错 */
+.hint-block { margin-top: 8px; font-size: 11.5px; line-height: 1.7; color: var(--text-faint); }
+.hint-block code { padding: 1px 4px; border-radius: 4px; background: var(--bg-elev-2); font-size: 11px; }
