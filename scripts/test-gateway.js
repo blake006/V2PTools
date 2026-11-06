@@ -123,7 +123,9 @@ function tcpAlive(port, timeout = 1500) {
 
   const cfgBypass = gw.buildConfig(node, 7890, 7891, { routeMode: 'bypass-cn' });
   await check('绕过大陆：CN 域名/IP 直连', () => {
-    assert.deepStrictEqual(cfgBypass.rules, [
+    // 前面允许有自检白名单（DOMAIN,xxx,PROXY），其余必须是 CN 直连 + 兜底代理
+    const rest = cfgBypass.rules.filter((r) => !r.startsWith('DOMAIN'));
+    assert.deepStrictEqual(rest, [
       'RULE-SET,cn-domain,DIRECT',
       'RULE-SET,cn-cidr,DIRECT',
       'MATCH,PROXY',
@@ -141,7 +143,8 @@ function tcpAlive(port, timeout = 1500) {
 
   const cfgList = gw.buildConfig(node, 7890, 7891, { routeMode: 'proxy-list' });
   await check('仅名单：名单走代理，其余直连', () => {
-    assert.deepStrictEqual(cfgList.rules, ['RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT']);
+    const rest = cfgList.rules.filter((r) => !r.startsWith('DOMAIN'));
+    assert.deepStrictEqual(rest, ['RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT']);
     assert.ok(cfgList['rule-providers']['gfw-domain']);
   });
 

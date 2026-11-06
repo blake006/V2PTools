@@ -2461,13 +2461,18 @@ function chooseExportFormat() {
           <button class="btn" data-fmt="json" style="justify-content:flex-start">JSON（含完整字段）</button>
           <button class="btn" data-fmt="txt" style="justify-content:flex-start">原始链接（TXT）</button>
         </div>
+        <div class="modal-foot">
+          <div class="foot-btns">
+            <button class="btn" data-cancel-export>取消</button>
+          </div>
+        </div>
       </div>`;
     mask.addEventListener('click', (e) => {
       const b = e.target.closest('[data-fmt]');
       if (b) {
         mask.remove();
         resolve(b.dataset.fmt);
-      } else if (e.target === mask) {
+      } else if (e.target.closest('[data-cancel-export]') || e.target === mask) {
         mask.remove();
         resolve(null);
       }
