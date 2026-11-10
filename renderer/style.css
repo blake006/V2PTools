@@ -502,7 +502,7 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .pill.ok { color: var(--ok); border-color: rgba(62,207,142,.3); background: var(--ok-soft); }
 
 /* ---------------- Toast ---------------- */
-.toast-wrap { position: fixed; bottom: 46px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 200; align-items: center; }
+.toast-wrap { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 200; align-items: center; }
 .toast {
   background: var(--bg-elev-2); border: 1px solid var(--border);
   color: var(--text); font-size: 12.5px; padding: 9px 16px; border-radius: 9px;
@@ -511,7 +511,7 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .toast.err { border-color: rgba(240,96,90,.5); color: #ffb3af; }
 .toast.warn { border-color: rgba(224,168,60,.5); color: #f0c674; }
 .toast.ok { border-color: rgba(62,207,142,.45); }
-@keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
 /* ---------------- 主区域：分组栏 + 表格 ---------------- */
 .main-row { flex: 1; min-height: 0; display: flex; gap: 10px; }

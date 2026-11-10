@@ -242,6 +242,17 @@ class Runner {
           // 延迟用的就是境外地址，通了即代表真能翻墙，不需要再单独探一次
           patch.overseasOk = true;
 
+          // 延迟高到这个程度，打开网页要等两秒以上，实际没法用。
+          // 能通、速度也可能不差，但体验上等于不可用。
+          if (patch.latency > 2000) {
+            patch.status = 'fail';
+            patch.error = '延迟过高（' + patch.latency + 'ms），实际不可用';
+            patch.testedAt = Date.now();
+            finished += 1;
+            send(patch);
+            return;
+          }
+
           patch.status = 'ok';
 
           // 3) 测速（全局最多 2 个节点同时下载，避免把带宽打满、把别人的延迟测虚高）
