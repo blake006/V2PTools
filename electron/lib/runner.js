@@ -4,7 +4,7 @@
  * 测试调度器：分批启动内核 → 并发测试 → 汇总归属地与健康度
  */
 
-const { testLatency, testSpeed, fetchExitIP, testTcp, DEFAULT_LATENCY_URLS, DEFAULT_IP_URLS } = require('./tester');
+const { testLatency, testSpeed, fetchExitIP, testTcp, DOMESTIC_LATENCY_URLS, DEFAULT_LATENCY_URLS, DEFAULT_IP_URLS } = require('./tester');
 const geo = require('./geo');
 const { UDP_TYPES } = require('./parser');
 
@@ -28,12 +28,39 @@ async function pool(items, limit, worker, isAborted) {
   await Promise.all(runners);
 }
 
+/**
+ * 限制「同时测速」的节点数。
+ * 测速要下几 MB，8 个节点一起下会把带宽打满，
+ * 此时其他节点的延迟测试会被拖高（并发检测下尤其明显）。
+ */
+function createSemaphore(max) {
+  let active = 0;
+  const queue = [];
+  return {
+    acquire() {
+      if (active < max) {
+        active += 1;
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => queue.push(resolve));
+    },
+    release() {
+      const next = queue.shift();
+      if (next) next();
+      else active -= 1;
+    },
+  };
+}
+
 class Runner {
   constructor(opts) {
     this.core = opts.core;
     this.settings = opts.settings;
     this.emit = opts.emit;
     this.aborted = false;
+    // 同时最多 2 个节点在测速，其余排队。测速要下几 MB，
+    // 全并发会把带宽打满，正在测延迟的节点结果会被拉高。
+    this.speedSem = createSemaphore(2);
   }
 
   cancel() {
@@ -184,29 +211,61 @@ class Runner {
           }
 
           if (!lat.ok) {
+            // 境外地址不通。补测一次国内地址，把「节点死」和「能连但翻不了墙」分开，
+            // 这样用户看到失败原因能判断是节点废了还是协议被识别。
+            let reason = lat.error || '代理不可用';
+            if (!this.aborted) {
+              const dom = await testLatency(port, {
+                urls: DOMESTIC_LATENCY_URLS,
+                timeout: latencyTimeout,
+                rounds: 1,
+              });
+              reason = dom.ok
+                ? '能连上但翻不了墙（境外站点全部超时，实际不可用）'
+                : '节点不通（' + (lat.error || '超时') + '）';
+            }
             patch.status = 'fail';
             patch.latency = null;
-            patch.error = lat.error || '代理不可用';
+            patch.error = reason;
             patch.testedAt = Date.now();
             finished += 1;
             send(patch);
             return;
           }
 
-          patch.latency = lat.avg;
+          // 用最小值而不是平均值：并发检测时别的节点正在下载测速，
+          // 平均值会被带宽竞争拉高。最小值更接近节点的真实最好水平，
+          // 也和 v2rayN 等工具的口径一致。
+          patch.latency = lat.min != null ? lat.min : lat.avg;
           patch.jitter = lat.jitter;
+          patch.latencyAvg = lat.avg;
+          // 延迟用的就是境外地址，通了即代表真能翻墙，不需要再单独探一次
+          patch.overseasOk = true;
+
           patch.status = 'ok';
 
-          // 3) 测速
+          // 3) 测速（全局最多 2 个节点同时下载，避免把带宽打满、把别人的延迟测虚高）
           if (wantSpeed && !this.aborted) {
             send({ ...patch, speed: null, testing: 'speed' });
-            const sp = await testSpeed(port, {
-              bytes: speedBytes,
-              timeout: speedTimeout,
-              sourceId: this.settings.speedSource,
-            });
-            patch.speed = sp.ok ? sp.mbps : null;
-            if (!sp.ok) patch.speedError = sp.error;
+            await this.speedSem.acquire();
+            let sp;
+            try {
+              sp = await testSpeed(port, {
+                bytes: speedBytes,
+                timeout: speedTimeout,
+                sourceId: this.settings.speedSource,
+              });
+            } finally {
+              this.speedSem.release();
+            }
+            patch.speed = sp && sp.ok ? sp.mbps : null;
+            if (sp && !sp.ok) patch.speedError = sp.error;
+            // 能连上但速度低到没法用（几十 KB/s），实际体验等于不可用。
+            // 这类节点延迟看着正常，用户拿来用却什么都打不开。
+            if (sp && sp.ok && sp.mbps < 0.3) {
+              patch.status = 'fail';
+              patch.error = `速度过低（${sp.mbps.toFixed(2)} Mbps），实际不可用`;
+            }
           }
 
           // 4) 出口 IP

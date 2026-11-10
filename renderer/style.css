@@ -729,3 +729,14 @@ tr.in-use .row-act { opacity: 1; }
 /* 输入框下方的常驻说明：长说明不要塞进 placeholder，一点击就消失，看着像出错 */
 .hint-block { margin-top: 8px; font-size: 11.5px; line-height: 1.7; color: var(--text-faint); }
 .hint-block code { padding: 1px 4px; border-radius: 4px; background: var(--bg-elev-2); font-size: 11px; }
+
+/* 扫码弹窗里的分享链接：可点击复制，最多显示 3 行 */
+.qr-link {
+  max-width: 100%; max-height: 54px; overflow: hidden;
+  font-size: 11px; line-height: 1.5; color: var(--text-faint);
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  word-break: break-all; cursor: pointer; padding: 6px 8px; border-radius: 8px;
+  background: var(--bg-elev-2); transition: background .15s, color .15s;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+}
+.qr-link:hover { background: var(--bg-hover); color: var(--text); }

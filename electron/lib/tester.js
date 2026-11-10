@@ -4,10 +4,34 @@ const http = require('http');
 const https = require('https');
 const { agentFor } = require('./proxyAgent');
 
+/**
+ * 延迟检测地址必须用**国内访问不了**的域名。
+ * 之前用 cp.cloudflare.com / hicloud / baidu —— 这些在国内都有节点，
+ * 经代理请求即使节点翻不了墙也能成功，于是「能连上但用不了」的废节点
+ * 被判定为可用（实测：某 ss 节点国内地址 512ms 通过，访问 gstatic 超时）。
+ * 换成境外被墙地址后，「经代理能通」才等价于「真能翻墙」。
+ */
 const DEFAULT_LATENCY_URLS = [
+  'https://www.gstatic.com/generate_204',
+  'https://www.google.com/generate_204',
+  'https://www.youtube.com/generate_204',
+];
+
+/** 诊断用：节点境外不通时，再用国内地址测一次，区分「节点死」和「只是翻不了墙」 */
+const DOMESTIC_LATENCY_URLS = [
   'http://cp.cloudflare.com/generate_204',
-  'http://connectivitycheck.platform.hicloud.com/generate_204',
   'http://www.baidu.com',
+];
+
+/**
+ * 境外可达性验证：延迟用国内地址测（数值低、反映线路质量），
+ * 但必须再用境外地址确认一次 —— 否则「能连上、返回 204，但翻不了墙」的
+ * 半死节点会被判成可用（用户实测就踩过这个坑）。
+ */
+const PROBE_URLS = [
+  'https://www.gstatic.com/generate_204',
+  'https://cp.cloudflare.com/generate_204',
+  'https://www.google.com/generate_204',
 ];
 
 const DEFAULT_IP_URLS = [
@@ -204,6 +228,18 @@ async function tryUrls(proxyPort, urls, opts) {
   return { ok: false, error: lastErr || '全部测速源不可用' };
 }
 
+/** 境外可达性：任意一个境外 204 通过就算能翻墙 */
+async function probeReachable(proxyPort, timeout = 8000) {
+  let lastErr = '';
+  for (const url of PROBE_URLS) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await requestThrough(proxyPort, url, { timeout, wantBody: false });
+    if (r.ok && r.status && r.status < 400) return { ok: true, url, ms: r.ttfb };
+    lastErr = r.error || 'HTTP ' + r.status;
+  }
+  return { ok: false, error: lastErr || '境外地址全部不可达' };
+}
+
 /** 延迟测试：先预热一次（建立 DNS/连接），再多次采样，返回 min / avg / 抖动 */
 async function testLatency(proxyPort, opts = {}) {
   const urls = opts.urls && opts.urls.length ? opts.urls : DEFAULT_LATENCY_URLS;
@@ -309,6 +345,9 @@ function testTcp(host, port, timeout = 4000) {
 }
 
 module.exports = {
+  PROBE_URLS,
+  DOMESTIC_LATENCY_URLS,
+  probeReachable,
   PROXY_CHECK_IP_URLS,
   DOMESTIC_CHECK_IP_URLS,
   DIRECT_CHECK_IP_URLS,

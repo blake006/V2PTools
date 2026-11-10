@@ -1308,6 +1308,12 @@ function handleTestEvent(ev) {
     const node = state.nodes.find((n) => n.id === ev.id);
     if (!node) return;
     Object.assign(node, ev.patch);
+    // 记一笔延迟历史，详情里能看趋势（最多留 20 次）
+    if (ev.patch && ev.patch.latency != null) {
+      if (!Array.isArray(node.latencyHistory)) node.latencyHistory = [];
+      node.latencyHistory.push({ t: Date.now(), ms: ev.patch.latency });
+      if (node.latencyHistory.length > 20) node.latencyHistory.splice(0, node.latencyHistory.length - 20);
+    }
     updateRow(node);
     if (!ev.silent) {
       state.progress.finished = ev.finished;
@@ -1397,6 +1403,15 @@ function openDrawer(id) {
       ${kv('TCP 握手', n.tcp != null ? n.tcp + ' ms' : '—')}
       ${kv('代理延迟', n.latency != null ? n.latency + ' ms' : '—')}
       ${kv('抖动', n.jitter != null ? n.jitter + ' ms' : '—')}
+      ${kv('历史延迟', (() => {
+        const h = Array.isArray(n.latencyHistory) ? n.latencyHistory : [];
+        if (!h.length) return '—（还没有历史记录）';
+        const last = h.slice(-6);
+        const vals = last.map((x) => x.ms);
+        const mn = Math.min(...h.map((x) => x.ms));
+        const mx = Math.max(...h.map((x) => x.ms));
+        return vals.join(' → ') + ' ms <span class="dim" style="font-size:11px">（共 ' + h.length + ' 次，最低 ' + mn + ' / 最高 ' + mx + '）</span>';
+      })())}
       ${kv('下载速度', n.speed != null ? n.speed.toFixed(2) + ' Mbps' : '—')}
       ${kv('检测时间', n.testedAt ? new Date(n.testedAt).toLocaleString('zh-CN') : '—')}
       ${n.group ? kv('来源分组', esc(n.group)) : ''}
@@ -2634,13 +2649,22 @@ async function showNodeQr(n) {
       <div class="modal-head"><div class="modal-title">扫码导入 · ${esc(n.name || n.server)}</div></div>
       <div class="modal-body" style="align-items:center;gap:12px">
         <img src="${r.dataUrl}" alt="节点二维码" style="width:280px;height:280px;border-radius:10px;background:#fff;padding:8px" />
-        <div class="dim" style="font-size:11.5px;line-height:1.5;text-align:center;word-break:break-all;max-height:48px;overflow:hidden">
-          ${esc(link.slice(0, 96))}${link.length > 96 ? '…' : ''}
+        <div class="qr-link" data-copy-link title="点击复制完整链接">
+          ${esc(link)}
         </div>
         <button class="btn btn-primary" data-close-qr style="width:100%">关闭</button>
       </div>
     </div>`;
-  mask.addEventListener('click', (e) => {
+  mask.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-copy-link]')) {
+      try {
+        await window.api.copyText(link);
+        toast('已复制分享链接', 'ok', 2000);
+      } catch (err) {
+        toast('复制失败：' + ((err && err.message) || err), 'err');
+      }
+      return;
+    }
     if (e.target === mask || e.target.closest('[data-close-qr]')) mask.remove();
   });
   document.body.appendChild(mask);
