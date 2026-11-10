@@ -1244,6 +1244,20 @@ async function runTest(mode, onlySelected, scope) {
   if (state.running) return toast('已有检测任务在进行', 'err');
   // 允许并行：订阅更新走主进程 HTTP，检测走独立内核实例，互不冲突（只是抢带宽）
   if (state.syncing) toast('订阅正在更新，检测结果可能受带宽影响', 'warn', 4000);
+
+  // 机器上还开着别的代理时，检测本身不受影响（直连检测内核的端口，不走系统代理），
+  // 但「能连上却翻不了墙」这类诊断会失真，提前说一声。
+  try {
+    const c = await window.api.envConflicts();
+    const serious = c && c.hasConflict && ((c.tunAdapters || []).length || (c.proxyPorts || []).length);
+    if (serious && !sessionStorage.getItem('v2p.detectConflictTip')) {
+      sessionStorage.setItem('v2p.detectConflictTip', '1');
+      toast('检测到 ' + c.summary + '。检测本身不受影响，但「能否翻墙」的判断可能被干扰，建议先关掉它们', 'warn', 9000);
+    }
+  } catch (e) {
+    /* 环境检查失败不影响检测 */
+  }
+
   let targets;
   if (scope === 'pending') {
     targets = state.nodes.filter((n) => n.status === 'idle' || n.status === 'testing');

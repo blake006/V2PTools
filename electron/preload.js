@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('api', {
   tunCheck: () => ipcRenderer.invoke('proxy:tun-check'),
   trafficToggle: () => ipcRenderer.invoke('traffic:toggle'),
   qrMake: (text) => ipcRenderer.invoke('qr:make', text),
+  envConflicts: () => ipcRenderer.invoke('env:conflicts'),
   backup: () => ipcRenderer.invoke('data:backup'),
   restore: () => ipcRenderer.invoke('data:restore'),
   resetAll: () => ipcRenderer.invoke('data:reset'),

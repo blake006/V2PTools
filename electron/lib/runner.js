@@ -262,7 +262,7 @@ class Runner {
             if (sp && !sp.ok) patch.speedError = sp.error;
             // 能连上但速度低到没法用（几十 KB/s），实际体验等于不可用。
             // 这类节点延迟看着正常，用户拿来用却什么都打不开。
-            if (sp && sp.ok && sp.mbps < 0.3) {
+            if (sp && sp.ok && sp.mbps < 0.5) {
               patch.status = 'fail';
               patch.error = `速度过低（${sp.mbps.toFixed(2)} Mbps），实际不可用`;
             }

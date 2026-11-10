@@ -4,7 +4,7 @@
 
 Unicode true
 !define APPNAME "V2PTools"
-!define VERSION "1.4.3"
+!define VERSION "1.4.4"
 
 Name "${APPNAME}"
 OutFile "..\dist\${APPNAME}-${VERSION}-win-x64-portable.exe"

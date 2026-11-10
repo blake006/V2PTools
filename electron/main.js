@@ -1386,6 +1386,8 @@ ipcMain.handle('proxy:enable', async (e, nodeId, mode) => {
  * 链路自检：分别用「本机代理端口」和「直连」查一次出口 IP。
  * 两个 IP 不同 = 代理真的生效；相同 = 流量没走代理（或节点本身是国内出口）。
  */
+ipcMain.handle('env:conflicts', async () => detectConflicts().catch(() => null));
+
 ipcMain.handle('proxy:check', async () => {
   const gw = gateway ? gateway.status() : { running: false, port: 0, node: null };
   const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
