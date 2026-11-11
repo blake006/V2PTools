@@ -67,6 +67,19 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/**
+ * 剥掉 Electron IPC 的包装前缀，只留真正的错误信息。
+ * 主进程抛的异常到渲染层会变成
+ *   Error invoking remote method 'import:fetch': Error: 真正的信息
+ * 直接显示给用户又长又难懂。
+ */
+function cleanErr(e) {
+  const msg = String((e && e.message) || e || '未知错误');
+  return msg
+    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+    .replace(/^Error:\s*/i, '');
+}
+
 function flagEmoji(code) {
   if (!code || code.length !== 2) return '';
   const A = 0x1f1e6;
@@ -1150,7 +1163,7 @@ async function doImport() {
       try {
         res = await window.api.fetchSubscription(url);
       } catch (err) {
-        const msg = String((err && err.message) || err);
+        const msg = StringcleanErr(err);
         const host = (msg.match(/域名\s+([\w.-]+)/) || [])[1] || new URL(url).hostname;
         $('#subResult').className = 'sub-result err';
         $('#subResult').textContent =
@@ -1223,7 +1236,7 @@ async function doImport() {
       closeModal('importModal');
     }
   } catch (e) {
-    toast('导入失败：' + (e.message || e), 'err');
+    toast('导入失败：' + cleanErr(e), 'err');
     const box = state.importTab === 'sub' ? $('#subResult') : null;
     if (box) {
       box.className = 'sub-result err';
@@ -1316,7 +1329,7 @@ async function runTest(mode, onlySelected, scope) {
   try {
     res = await window.api.runTest(payload);
   } catch (err) {
-    res = { error: '检测失败：' + ((err && err.message) || err) };
+    res = { error: '检测失败：' + cleanErr(err) };
   } finally {
     setRunning(false);
   }
@@ -1982,7 +1995,12 @@ $$('#importTabs .tab').forEach((btn) => {
 
 $('#btnDoImport').addEventListener('click', doImport);
 $('#dropzone').addEventListener('click', async () => {
-  const res = await window.api.importFile();
+  let res;
+  try {
+    res = await window.api.importFile();
+  } catch (err) {
+    return toast('读取文件失败：' + cleanErr(err), 'err');
+  }
   if (!res) return;
   if (!res.nodes.length) {
     $('#fileResult').className = 'sub-result err';
@@ -2055,7 +2073,12 @@ $('#btnProxyMenu').addEventListener('click', (e) => {
 });
 
 $('#btnTraffic').addEventListener('click', async () => {
-  const on = await window.api.trafficToggle();
+  let on;
+  try {
+    on = await window.api.trafficToggle();
+  } catch (err) {
+    return toast('悬浮窗开关失败：' + cleanErr(err), 'err');
+  }
   toast(on ? '流量悬浮窗已打开' : '流量悬浮窗已关闭', 'ok', 2000);
 });
 
@@ -2123,7 +2146,7 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
     r = await window.api.proxyCheck();
   } catch (err) {
     $('#statusText').textContent = '自检失败';
-    return toast('自检失败：' + ((err && err.message) || err), 'err', 6000);
+    return toast('自检失败：' + cleanErr(err), 'err', 6000);
   }
   const lines = [];
 
@@ -2323,7 +2346,7 @@ $('#btnAddSource').addEventListener('click', async () => {
     renderSources();
     toast(`订阅已添加：识别 ${res.nodes.length} 个节点，新增 ${added} 个`, 'ok');
   } catch (e) {
-    toast('订阅添加失败：' + (e.message || e), 'err');
+    toast('订阅添加失败：' + cleanErr(e), 'err');
   }
 });
 
@@ -2692,7 +2715,7 @@ async function showNodeQr(n) {
         await window.api.copyText(link);
         toast('已复制分享链接', 'ok', 2000);
       } catch (err) {
-        toast('复制失败：' + ((err && err.message) || err), 'err');
+        toast('复制失败：' + cleanErr(err), 'err');
       }
       return;
     }
