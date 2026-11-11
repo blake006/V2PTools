@@ -502,7 +502,15 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .pill.ok { color: var(--ok); border-color: rgba(62,207,142,.3); background: var(--ok-soft); }
 
 /* ---------------- Toast ---------------- */
-.toast-wrap { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 200; align-items: center; }
+/* 弹窗遮罩用了 backdrop-filter，会创建合成层；toast 必须提到最顶层并强制独立层叠上下文，
+     否则会被遮罩的模糊效果「糊掉」（表现为提示文字发虚、看不清） */
+.toast-wrap {
+  position: fixed; top: 56px; left: 50%;
+  transform: translateX(-50%) translateZ(0);
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 99999; align-items: center;
+  isolation: isolate; pointer-events: none;
+}
 .toast {
   background: var(--bg-elev-2); border: 1px solid var(--border);
   color: var(--text); font-size: 12.5px; padding: 9px 16px; border-radius: 9px;
