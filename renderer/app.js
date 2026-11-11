@@ -1354,6 +1354,9 @@ async function runTest(mode, onlySelected, scope) {
   else toast(`检测完成：${state.progress.finished}/${state.progress.total}`, 'ok');
   saveNodes();
   updateStats();
+  // 侧栏的分组/协议/国家计数依赖节点状态，检测完必须重绘，
+  // 否则「可用 12」还停留在检测前的数字
+  renderSidebar();
 }
 
 function handleTestEvent(ev) {

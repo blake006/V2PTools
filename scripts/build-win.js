@@ -18,6 +18,46 @@ const { execFileSync, spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+
+/**
+ * 只保留最近 N 个版本的产物。
+ * 每个版本 zip 127MB + exe 95MB，攒几版就能把磁盘吃干净
+ * （曾经攒到 1.6GB，导致 electron-builder 报 Array buffer allocation failed）。
+ */
+function pruneOldArtifacts(keep = 2) {
+  const DIST = path.join(ROOT, 'dist');
+  if (!fs.existsSync(DIST)) return;
+  const files = fs.readdirSync(DIST).filter((f) => /^V2PTools-[\d.]+-win-x64\.(zip|exe)$/.test(f));
+  const versions = [...new Set(files.map((f) => (f.match(/^V2PTools-([\d.]+)-/) || [])[1]).filter(Boolean))];
+  const cmp = (a, b) => {
+    const pa = a.split('.').map(Number);
+    const pb = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+      const d = (pa[i] || 0) - (pb[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  };
+  versions.sort((a, b) => cmp(b, a)); // 新的在前
+  const drop = versions.slice(keep);
+  let freed = 0;
+  for (const v of drop) {
+    for (const f of files.filter((x) => x.startsWith(`V2PTools-${v}-`))) {
+      const p = path.join(DIST, f);
+      try {
+        freed += fs.statSync(p).size;
+        fs.unlinkSync(p);
+      } catch (e) {
+        /* 忽略 */
+      }
+    }
+  }
+  if (drop.length) {
+    console.log(`  清理旧版本 ${drop.join(', ')}，释放 ${Math.round(freed / 1048576)}MB`);
+  }
+}
+
+pruneOldArtifacts(2);
 const VERSION = pkg.version;
 const APP = pkg.build.productName || 'V2PTools';
 const DIST = path.join(ROOT, 'dist');
