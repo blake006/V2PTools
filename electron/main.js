@@ -1029,9 +1029,12 @@ ipcMain.handle('import:fetch', async (e, url) => {
     directErr = err;
   }
 
-  // 直连/代理都失败 → 借道已检测可用的节点再试一次
-  // （测速进行中不能抢内核，gateway 在跑时也不能动它）
-  if (!text && !runner && !(gateway && gateway.status().running)) {
+  // 直连/代理都失败 → 借道已检测可用的节点再试一次。
+  // 之前要求「gateway 没在跑」才借道，导致开着系统代理时永远借不了：
+  // 系统代理的 7890 是按分流规则转发的，「绕过大陆」模式下订阅域名被判成
+  // 直连就等于直连访问被墙的 Cloudflare，必然失败。
+  // 检测内核是独立进程 + 独立端口，与 gateway 不冲突，只避开测速中（抢内核）。
+  if (!text && !runner) {
     try {
       const r = await fetchViaNodes(url);
       if (r) {

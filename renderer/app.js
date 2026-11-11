@@ -1144,7 +1144,24 @@ async function doImport() {
       if (!url) return toast('请填写订阅链接', 'err');
       $('#subResult').className = 'sub-result';
       $('#subResult').textContent = '正在拉取订阅…';
-      const res = await window.api.fetchSubscription(url);
+      // 拉取失败时主进程会抛异常（不是返回 errors），必须在这里接住，
+      // 否则会冒泡到外层 catch，用户看到的是一长串 IPC 原始错误。
+      let res;
+      try {
+        res = await window.api.fetchSubscription(url);
+      } catch (err) {
+        const msg = String((err && err.message) || err);
+        const host = (msg.match(/域名\s+([\w.-]+)/) || [])[1] || new URL(url).hostname;
+        $('#subResult').className = 'sub-result err';
+        $('#subResult').textContent =
+          '订阅拉取失败：' + host + ' 连不上。\n' +
+          '常见原因：\n' +
+          '· 订阅域名被墙（很多订阅挂在 Cloudflare 上，国内直连不通）→ 先开启代理再试\n' +
+          '· 链接已过期或被服务商删除 → 重新复制一次\n' +
+          '· 代理节点本身访问不了该域名 → 换个节点再试\n' +
+          '临时办法：用浏览器打开链接，能下载就把内容复制到「批量链接」导入';
+        return;
+      }
       if (!res.nodes.length) {
         $('#subResult').className = 'sub-result err';
         const raw = res.errors && res.errors.length ? String(res.errors[0].error || '') : '';
