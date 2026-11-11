@@ -670,6 +670,13 @@ function toggleFacet(key, value) {
   applyFilters();
 }
 
+/** 只检测某个分组的节点 */
+function testGroup(name) {
+  const count = state.nodes.filter((n) => (n.group || '') === name).length;
+  if (!count) return toast('这个分组没有节点', 'err');
+  runTest('full', false, 'group:' + name);
+}
+
 /** 分组右键菜单 */
 function openGroupMenu(name, anchorEl) {
   const r = anchorEl.getBoundingClientRect();
@@ -677,6 +684,8 @@ function openGroupMenu(name, anchorEl) {
     [
       { label: '重命名分组…', onClick: () => renameGroup(name) },
       { label: '把选中节点移入', onClick: () => moveSelectedToGroup(name) },
+      '-',
+      { label: '检测此分组的节点', onClick: () => testGroup(name) },
       '-',
       { label: '导出该分组链接', onClick: () => exportGroup(name) },
       { label: '删除分组（保留节点）', danger: true, onClick: () => deleteGroup(name) },
@@ -1293,11 +1302,19 @@ async function runTest(mode, onlySelected, scope) {
     targets = state.nodes.filter((n) => n.status === 'idle' || n.status === 'testing');
   } else if (scope === 'failed') {
     targets = state.nodes.filter((n) => n.status === 'fail');
+  } else if (scope && scope.indexOf('group:') === 0) {
+    const g = scope.slice(6);
+    targets = state.nodes.filter((n) => (n.group || '') === g);
   } else {
     targets = onlySelected ? state.nodes.filter((n) => state.selected.has(n.id)) : state.nodes.slice();
   }
   if (!targets.length) {
-    const msg = scope === 'pending' ? '没有未检测的节点' : scope === 'failed' ? '没有失败的节点' : onlySelected ? '请先选择节点' : '没有可检测的节点';
+    const msg =
+      scope === 'pending' ? '没有未检测的节点'
+      : scope === 'failed' ? '没有失败的节点'
+      : scope && scope.indexOf('group:') === 0 ? '这个分组没有节点'
+      : onlySelected ? '请先选择节点'
+      : '没有可检测的节点';
     return toast(msg, 'err');
   }
 

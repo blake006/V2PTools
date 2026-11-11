@@ -1,7 +1,7 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "description": "V2PTools",
   "main": "electron/main.js",
   "author": {
