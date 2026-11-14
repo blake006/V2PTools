@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('api', {
   proxyRoute: (mode) => ipcRenderer.invoke('proxy:route', mode),
   proxyProbe: () => ipcRenderer.invoke('proxy:probe'),
   proxyBypassDefault: () => ipcRenderer.invoke('proxy:bypassDefault'),
+  netInspect: () => ipcRenderer.invoke('net:inspect'),
+  netRepair: () => ipcRenderer.invoke('net:repair'),
 
   onProxyState: (cb) => {
     const handler = (_e, st) => cb(st);
@@ -51,6 +53,11 @@ contextBridge.exposeInMainWorld('api', {
     const handler = (_e, msg) => cb(msg);
     ipcRenderer.on('proxy:error', handler);
     return () => ipcRenderer.removeListener('proxy:error', handler);
+  },
+  onNetGuardNotice: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('net:guard-notice', handler);
+    return () => ipcRenderer.removeListener('net:guard-notice', handler);
   },
 
   onTestEvent: (cb) => {

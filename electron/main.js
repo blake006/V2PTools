@@ -15,6 +15,7 @@ const { SystemProxy, DEFAULT_BYPASS } = require('./lib/sysproxy');
 const { Gateway, DEFAULT_PORT, ROUTE_MODES } = require('./lib/gateway');
 const { fetchExitIP, requestThrough, PROXY_CHECK_IP_URLS, DIRECT_CHECK_IP_URLS, DOMESTIC_CHECK_IP_URLS } = require('./lib/tester');
 const { detectConflicts } = require('./lib/netcheck');
+const netGuard = require('./lib/netGuard');
 const { buildSingBox } = require('./lib/exporters');
 const QRCode = require('qrcode');
 const { deriveProxyState, pickRouteMode, STATE_TEXT } = require('./lib/proxyState');
@@ -28,6 +29,10 @@ let runner = null;
 let gateway = null;
 let sysproxy = null;
 let quitting = false;
+/** 渲染进程连续崩溃计数：超过阈值就不再自动重载，避免崩溃-重载死循环 */
+let renderCrashCount = 0;
+/** 启动自愈结果：窗口还没加载完时先存着，did-finish-load 再推给界面 */
+let pendingGuardNotice = null;
 
 /**
  * 单实例锁：多开会抢 7890 端口和系统代理，第二个实例开代理必然失败。
@@ -68,6 +73,16 @@ function bootLog(msg) {
 
 process.on('uncaughtException', (err) => bootLog('uncaughtException: ' + (err && err.stack ? err.stack : err)));
 process.on('unhandledRejection', (err) => bootLog('unhandledRejection: ' + (err && err.stack ? err.stack : err)));
+
+// 退出兜底：不论走 before-quit、app.exit 还是异常退出，都同步杀掉内核子进程。
+// Windows 不会在父进程结束时自动回收子进程，不杀就会留下孤儿 mihomo 占端口/内存。
+process.on('exit', () => {
+  for (const mgr of [core, gateway]) {
+    try {
+      if (mgr && mgr.proc && mgr.proc.exitCode === null) mgr.proc.kill();
+    } catch (e) {}
+  }
+});
 
 /* ------------------------------------------------------------------ */
 /* 路径                                                                */
@@ -520,7 +535,27 @@ function createWindow() {
   bootLog('BrowserWindow 已创建，加载页面');
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   win.webContents.on('did-fail-load', (e, code, desc, url) => bootLog(`did-fail-load ${code} ${desc} ${url}`));
-  win.webContents.on('render-process-gone', (e, d) => bootLog('render-process-gone ' + JSON.stringify(d)));
+  win.webContents.on('render-process-gone', (e, d) => {
+    bootLog('render-process-gone ' + JSON.stringify(d));
+    // 渲染进程崩溃（GPU / OOM / 被系统回收）后自动重载，避免「进程还在但白屏」。
+    // 正常退出不重载；连续崩溃超过 3 次则停止重试，防止死循环。
+    if (quitting || !win || win.isDestroyed()) return;
+    if (d && d.reason === 'clean-exit') return;
+    renderCrashCount += 1;
+    if (renderCrashCount > 3) {
+      bootLog('渲染进程连续崩溃 ' + renderCrashCount + ' 次，停止自动重载');
+      return;
+    }
+    setTimeout(() => {
+      if (win && !win.isDestroyed()) win.reload();
+    }, 800);
+  });
+  win.webContents.on('did-finish-load', () => {
+    renderCrashCount = 0;
+    if (!pendingGuardNotice) return;
+    win.webContents.send('net:guard-notice', pendingGuardNotice);
+    pendingGuardNotice = null;
+  });
 
   // 兜底：首帧迟迟不来（页面卡住 / GPU 异常）也要把窗口显示出来，
   // 否则进程活着但没窗口，用户只会看到「双击没反应」，而且它占着单实例锁。
@@ -693,13 +728,30 @@ async function enableSystemProxy(nodeId, mode = 'system') {
     await gateway.start(node, { port: wantPort, routeMode, tun: wantTun });
   }
 
+  // ② 代理逻辑：绝不把系统代理指向一个没验证过的端口。
+  // 内核刚报过「启动成功」但下一秒就退了，若此时写入 ProxyEnable=1，
+  // 整机立刻断网 —— 这正是本次事故最危险的窗口。
+  const healthy = await gateway.alive().catch(() => false);
+  if (!healthy) {
+    await gateway.stop().catch(() => {});
+    throw new Error('代理内核未通过存活校验，已取消开启系统代理（网络设置未改动）');
+  }
+
   if (wantTun) {
     // TUN 已经在网卡层接管全部流量，再挂系统代理就是双重代理，必须还原掉
     await sysproxy.restore().catch(() => {});
   } else {
     try {
       await sysproxy.apply({ port: gateway.port, bypass, winhttp: !!s.systemProxyWinhttp });
+      // 写回读校验：注册表写失败 / 被别的软件瞬间抢走，都要立刻回滚
+      const st = await sysproxy.status();
+      if (!st.active) {
+        await sysproxy.restore().catch(() => {});
+        await gateway.stop().catch(() => {});
+        throw new Error('系统代理写入后校验失败（可能被其它代理软件抢占），已自动回滚');
+      }
     } catch (err) {
+      await sysproxy.restore().catch(() => {});
       await gateway.stop().catch(() => {});
       throw err;
     }
@@ -720,12 +772,24 @@ async function disableSystemProxy() {
       await sysproxy.restore();
     } catch (err) {
       restoreErr = err;
+      // ③ 关闭逻辑：还原失败绝不能把用户留在「代理指向死端口」的状态。
+      // 哪怕完整快照写不回去，也要先把开关关掉、把失效地址清掉。
+      try {
+        await sysproxy.forceDirect();
+      } catch (e) {
+        /* 已经尽力，错误信息交给上层提示 */
+      }
     }
   }
-  // 还原失败就保留内核，否则用户会处于「代理指向死端口」的状态
-  if (!restoreErr && gateway) await gateway.stop();
+  // 只有确认系统设置已安全复位，才停内核
+  const sys = await sysproxy.status().catch(() => ({ proxyEnable: 1 }));
+  if (!restoreErr || sys.proxyEnable === 0) {
+    if (gateway) await gateway.stop().catch(() => {});
+  }
   sendProxyState();
-  if (restoreErr) throw new Error('还原系统代理失败：' + restoreErr.message);
+  if (restoreErr && sys.proxyEnable !== 0) {
+    throw new Error('还原系统代理失败：' + restoreErr.message + '（请用「一键修复网络」复位）');
+  }
   return proxyStatus();
 }
 
@@ -736,6 +800,7 @@ async function disableSystemProxy() {
 let watchTimer = null;
 let lastWatchSig = '';
 let watchFails = 0;
+let deadTicks = 0;
 
 /**
  * 定期自检：
@@ -771,11 +836,24 @@ function startProxyWatch() {
       if (gateway.running) {
         const alive = await gateway.alive();
         gateway.aliveFlag = alive;
-        if (!alive) bootLog('看守：网关内核无响应，标记为异常');
+        // ⑥ 断网机制：内核僵了而系统代理还指着它 = 整机断网。
+        // 连续两次自检失败就先复位网络，不让用户「开着代理却上不了网」等人工发现。
+        deadTicks = alive ? 0 : deadTicks + 1;
+        if (!alive) bootLog('看守：网关内核无响应，标记为异常 (' + deadTicks + ')');
+        if (deadTicks >= 2) {
+          deadTicks = 0;
+          bootLog('看守：内核连续无响应，自动还原系统代理');
+          await sysproxy.restore().catch(() => sysproxy.forceDirect().catch(() => {}));
+          await gateway.stop().catch(() => {});
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('proxy:error', '代理内核已失去响应，系统代理已自动还原（可用「一键修复网络」复查）');
+          }
+        }
         // 3. 每 30s（约 6 个 tick）做一次真实出口探测
         if (alive && tick % 8 === 0) await gateway.probeWithCache({ timeout: 8000 });
       } else {
         gateway.aliveFlag = false;
+        deadTicks = 0;
       }
 
       // 2. 系统代理是否被外部改动（这一步要调 reg query）
@@ -833,11 +911,18 @@ app.whenReady().then(async () => {
       if (win && !win.isDestroyed()) win.webContents.send('core:log', msg);
     },
     onExit: async ({ error }) => {
-      // 内核意外退出：立刻还原系统代理，否则整台电脑会断网
+      // 内核意外退出：立刻还原系统代理，否则整台电脑会断网。
+      // ③ 关闭逻辑：还原失败再走护栏的定点修复，绝不留「指向死端口」的状态。
       try {
         const sys = await sysproxy.status();
         if (sys.active) await sysproxy.restore();
-      } catch (e) {}
+        const after = await sysproxy.status();
+        if (after.proxyEnable === 1 && after.server.startsWith('127.')) {
+          await netGuard.repair(sysproxy, guardOpts({ probe: false }));
+        }
+      } catch (e) {
+        bootLog('内核退出后还原系统代理失败: ' + e.message);
+      }
       sendProxyState();
       if (win && !win.isDestroyed()) {
         win.webContents.send('proxy:error', error || '代理内核已退出，系统代理已自动还原');
@@ -845,13 +930,44 @@ app.whenReady().then(async () => {
     },
   });
 
-  bootLog('Gateway 就绪，检查遗留系统代理');
-  // 上次异常退出可能残留系统代理设置，启动时先还原
+  bootLog('Gateway 就绪，开始开机网络安全体检');
+  /**
+   * ④ 恢复逻辑 / ⑥ 断网机制：开机第一件事是检查上次异常退出有没有把
+   * 系统代理锁死在失效端口。这一步必须发生在「开窗口」和「用户点开启」之前，
+   * 否则用户连界面里的自检都打不开（流量都进黑洞了）。
+   *
+   * 只看「确定是本工具留下的 + 端口确实没人监听」的项，绝不整体重置网络：
+   * 其它代理软件正在用的端口是活的，不会被误伤。
+   */
   try {
+    const s0 = currentSettings();
+    const report = await netGuard.inspect(sysproxy, {
+      preferredPort: Number(s0.systemProxyPort) || DEFAULT_PORT,
+      gatewayRunning: false,
+      probe: false, // 开机不额外做外网探测，避免拖慢启动
+    });
+    if (report.findings.length) {
+      const fixed = await netGuard.repair(sysproxy, {
+        preferredPort: Number(s0.systemProxyPort) || DEFAULT_PORT,
+        gatewayRunning: false,
+        probe: false,
+      });
+      const critical = report.findings.filter((f) => f.level === 'critical');
+      if (critical.length) {
+        pendingGuardNotice = {
+          level: fixed.ok ? 'warn' : 'err',
+          title: fixed.ok ? '已自动修复上次遗留的代理设置' : '代理残留修复未完成',
+          text: fixed.summary,
+          details: fixed.actions.map((a) => `${a.ok ? '✓' : '✗'} ${a.label}${a.message ? '：' + a.message : ''}`),
+        };
+      }
+      bootLog('开机自愈：' + fixed.summary);
+    }
+    // 兼容旧路径：备份/标记指向同一地址但端口仍活着时也做一次常规还原
     const rec = await sysproxy.recoverIfStale();
-    if (rec.recovered) console.log('已还原上次遗留的系统代理设置:', rec.target);
+    if (rec.recovered) bootLog('已还原上次遗留的系统代理设置: ' + rec.target);
   } catch (e) {
-    console.error('检查遗留系统代理失败:', e.message);
+    bootLog('开机网络安全体检失败: ' + e.message);
   }
 
   bootLog('开始创建窗口');
@@ -891,10 +1007,25 @@ app.on('before-quit', async (e) => {
     }
   }
   try {
-    // 退出前必须还原系统代理，否则用户会「上不了网」
-    if (sysproxy) await sysproxy.restore().catch(() => {});
-    if (gateway) await gateway.stop();
-    if (core) await core.stop();
+    // 退出前必须还原系统代理，否则用户会「上不了网」。
+    // Windows 关机时留给应用的窗口很短，任何一步卡住都要超时放行，
+    // 不能因为 reg/powershell 慢就让用户关不了机。
+    const withTimeout = (p, ms) =>
+      Promise.race([Promise.resolve(p).catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
+
+    if (sysproxy) {
+      let restored = false;
+      try {
+        await withTimeout(sysproxy.restore(), 4000);
+        restored = (await sysproxy.status().catch(() => ({}))).proxyEnable === 0;
+      } catch (e) {}
+      if (!restored) {
+        // 兜底：只关开关、清失效地址，不做完整快照还原
+        await withTimeout(sysproxy.forceDirect(), 2500);
+      }
+    }
+    if (gateway) await withTimeout(gateway.stop(), 1500);
+    if (core) await withTimeout(core.stop(), 1500);
   } finally {
     app.exit(0);
   }
@@ -1300,14 +1431,16 @@ ipcMain.handle('proxy:status', async () => {
 
 /** wintun.dll 必须和 mihomo.exe 同目录，Windows 才会加载 */
 function wintunPath() {
+  const candidates = [];
   try {
-    const beside = path.join(path.dirname(resolveCorePath()), 'wintun.dll');
-    if (fs.existsSync(beside)) return beside;
+    candidates.push(path.join(path.dirname(resolveCorePath()), 'wintun.dll'));
   } catch (e) {
     /* 开发环境内核路径可能还没就绪 */
   }
-  const dev = path.join(__dirname, '..', 'vendor', 'wintun.dll');
-  return fs.existsSync(dev) ? dev : '';
+  if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'core', 'wintun.dll'));
+  candidates.push(path.join(__dirname, '..', 'vendor', 'wintun.dll'));
+  candidates.push(path.join(app.getPath('userData'), 'core', 'wintun.dll'));
+  return candidates.find((p) => fs.existsSync(p)) || '';
 }
 
 /** 当前进程是否以管理员身份运行（TUN 建虚拟网卡必须） */
@@ -1335,17 +1468,65 @@ function isElevated() {
 async function checkTunReady() {
   const reasons = [];
   const dll = wintunPath();
-  if (!dll) reasons.push('缺少 wintun.dll（虚拟网卡驱动），请使用完整压缩包');
   const admin = await isElevated();
-  if (!admin) reasons.push('需要管理员权限才能创建虚拟网卡');
   const conflicts = await detectConflicts().catch(() => null);
+
+  if (!dll) {
+    reasons.push(
+      '缺少 wintun.dll（虚拟网卡驱动）。请重新下载完整压缩包，或把 wintun.dll 放到内核同目录：' +
+        path.dirname(resolveCorePath())
+    );
+  }
+  if (!admin) reasons.push('需要管理员权限才能创建虚拟网卡（可用「以管理员身份重启」一键提权）');
   if (conflicts && conflicts.tunAdapters && conflicts.tunAdapters.length) {
     reasons.push(`已有虚拟网卡 ${conflicts.tunAdapters.join('/')}，可能被其它 VPN 占用，请先退出它们`);
   }
-  return { ok: reasons.length === 0, reasons, admin, hasWintun: !!dll, dll };
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    admin,
+    hasWintun: !!dll,
+    dll,
+    // 渲染层据此给「改用系统代理」的退路：TUN 不是上网的唯一方式，
+    // 缺驱动/权限时不应该让用户以为整个工具都坏了
+    fallbackToSystem: true,
+    canElevate: !admin && !!dll,
+  };
 }
 
 ipcMain.handle('proxy:tun-check', () => checkTunReady());
+
+/* ------------------------------------------------------------------ */
+/* 网络安全护栏 IPC：体检 + 一键修复                                     */
+/* ------------------------------------------------------------------ */
+
+function guardOpts(extra = {}) {
+  const s = currentSettings();
+  return {
+    preferredPort: Number(s.systemProxyPort) || DEFAULT_PORT,
+    gatewayPort: gateway && gateway.running ? gateway.port : 0,
+    gatewayRunning: !!(gateway && gateway.running),
+    ...extra,
+  };
+}
+
+ipcMain.handle('net:inspect', async () => {
+  try {
+    return await netGuard.inspect(sysproxy, guardOpts());
+  } catch (err) {
+    return { ok: false, findings: [], summary: '体检失败：' + err.message, error: err.message };
+  }
+});
+
+ipcMain.handle('net:repair', async () => {
+  try {
+    const r = await netGuard.repair(sysproxy, guardOpts({ force: true }));
+    sendProxyState();
+    return r;
+  } catch (err) {
+    return { ok: false, actions: [], summary: '修复失败：' + err.message, error: err.message };
+  }
+});
 
 /** 节点二维码：把分享链接画成图，手机扫码直接导入 */
 ipcMain.handle('qr:make', async (e, text) => {
@@ -1395,7 +1576,7 @@ ipcMain.handle('proxy:check', async () => {
   const gw = gateway ? gateway.status() : { running: false, port: 0, node: null };
   const sys = sysproxy ? await sysproxy.status() : { supported: false, active: false };
 
-  const [direct, via, viaDomestic, https, conflicts] = await Promise.all([
+  const [direct, via, viaDomestic, https, conflicts, guard] = await Promise.all([
     fetchExitIP(0, { timeout: 8000, urls: DIRECT_CHECK_IP_URLS }).catch((e) => ({ ok: false, error: e.message })),
     gw.running
       ? fetchExitIP(gw.port, { timeout: 12000, urls: PROXY_CHECK_IP_URLS }).catch((e) => ({ ok: false, error: e.message }))
@@ -1417,6 +1598,10 @@ ipcMain.handle('proxy:check', async () => {
         ).then((list) => list.find((x) => x.ok) || list[0])
       : Promise.resolve({ ok: false, error: '内核未运行' }),
     detectConflicts().catch(() => null),
+    // ⑦ 自检机制：链路自检顺带查一遍「有没有会让整机断网的残留」
+    netGuard
+      .inspect(sysproxy, guardOpts({ probe: false }))
+      .catch((e) => ({ ok: false, findings: [], summary: '护栏体检失败：' + e.message })),
   ]);
 
   return {
@@ -1426,6 +1611,7 @@ ipcMain.handle('proxy:check', async () => {
     via,
     https,
     conflicts,
+    guard,
     viaDomestic,
     same: !!(via && via.ok && direct && direct.ok && via.ip === direct.ip),
     /**
@@ -1463,6 +1649,25 @@ ipcMain.handle('proxy:disable', async () => {
 });
 
 /** 已开启时换节点：端口不变，系统代理无需改动 */
+/**
+ * 切换类操作的最后一道保险：内核没在跑，但系统代理还指着它 = 整机断网。
+ * 正常路径由 gateway 自动回退原配置保证；只有回退也失败时才会走到这里。
+ */
+async function ensureProxySafe() {
+  if (gateway && gateway.running) return false;
+  try {
+    const sys = await sysproxy.status();
+    if (sys.active) {
+      await sysproxy.restore().catch(() => sysproxy.forceDirect().catch(() => {}));
+      bootLog('切换失败且内核未恢复，已复位系统代理以避免断网');
+      return true;
+    }
+  } catch (e) {
+    bootLog('ensureProxySafe 失败: ' + e.message);
+  }
+  return false;
+}
+
 ipcMain.handle('proxy:switch', async (e, nodeId) => {
   if (!gateway.running) return { error: '系统代理未开启' };
   const nodes = store.read('nodes.json', []);
@@ -1473,7 +1678,9 @@ ipcMain.handle('proxy:switch', async (e, nodeId) => {
     sendProxyState();
     return await proxyStatus();
   } catch (err) {
-    return { error: err.message };
+    const restored = await ensureProxySafe();
+    sendProxyState();
+    return { error: err.message + (restored ? '；系统代理已复位为直连，可重新开启' : '') };
   }
 });
 
@@ -1488,7 +1695,9 @@ ipcMain.handle('proxy:route', async (e, mode) => {
     sendProxyState();
     return await proxyStatus();
   } catch (err) {
-    return { error: err.message };
+    const restored = await ensureProxySafe();
+    sendProxyState();
+    return { error: err.message + (restored ? '；系统代理已复位为直连，可重新开启' : '') };
   }
 });
 

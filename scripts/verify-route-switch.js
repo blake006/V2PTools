@@ -19,7 +19,7 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 const http = require('http');
-const { Gateway, ROUTE_MODES } = require('../electron/lib/gateway');
+const { Gateway, ROUTE_MODES, SELF_CHECK_RULES } = require('../electron/lib/gateway');
 
 const CORE = path.join(__dirname, '..', 'vendor', 'mihomo.exe');
 const RULES = path.join(__dirname, '..', 'assets', 'rules');
@@ -92,6 +92,7 @@ const node = {
 
   const cfgCn = gw.buildConfig(node, 7890, 7891, { routeMode: 'bypass-cn' });
   eq('bypass-cn 规则顺序', cfgCn.rules, [
+    ...SELF_CHECK_RULES,
     'RULE-SET,cn-domain,DIRECT',
     'RULE-SET,cn-cidr,DIRECT',
     'MATCH,PROXY',
@@ -101,7 +102,7 @@ const node = {
   eq('cn-cidr 行为为 ipcidr', cfgCn['rule-providers']['cn-cidr'].behavior, 'ipcidr');
 
   const cfgList = gw.buildConfig(node, 7890, 7891, { routeMode: 'proxy-list' });
-  eq('proxy-list 规则顺序', cfgList.rules, ['RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT']);
+  eq('proxy-list 规则顺序', cfgList.rules, [...SELF_CHECK_RULES, 'RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT']);
   eq('proxy-list 只有一个 provider', Object.keys(cfgList['rule-providers'] || {}), ['gfw-domain']);
 
   const cfgBad = gw.buildConfig(node, 7890, 7891, { routeMode: 'nonsense' });

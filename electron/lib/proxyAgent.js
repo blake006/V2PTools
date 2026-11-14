@@ -67,7 +67,10 @@ function makeCreateConnection(secure) {
         {
           socket,
           servername: options.servername || host,
-          rejectUnauthorized: false,
+          // 默认校验证书（此前恒为 false，等于对「经代理的测试流量」关闭了 TLS 校验，
+          // 存在中间人面）。正常节点只是转发字节、不终止 TLS，校验证书应能通过；
+          // 极少数会做 TLS 拦截的节点，可用 V2P_INSECURE_TLS=1 临时放行。
+          rejectUnauthorized: process.env.V2P_INSECURE_TLS !== '1',
           ALPNProtocols: ['http/1.1'],
         },
         () => cb(null, tlsSocket)

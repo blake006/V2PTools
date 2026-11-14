@@ -50,9 +50,21 @@ function findMakensis() {
     if (!fs.existsSync(root)) continue;
     for (const dir of fs.readdirSync(root)) {
       if (!/^nsis/i.test(dir)) continue;
-      for (const sub of ['bin/makensis.exe', 'makensis.exe', 'Bin/makensis.exe']) {
-        const p = path.join(root, dir, sub);
-        if (fs.existsSync(p)) candidates.push(p);
+      const base = path.join(root, dir);
+      // 缓存可能是 Cache/nsis-3.0.4.1/makensis.exe，
+      // 也可能是 Cache/nsis-3.0.4.1/nsis-3.0.4.1-xxxx/Bin/makensis.exe（多一层）
+      const levels = [base];
+      try {
+        for (const s of fs.readdirSync(base)) {
+          const p = path.join(base, s);
+          if (fs.statSync(p).isDirectory()) levels.push(p);
+        }
+      } catch (e) {}
+      for (const level of levels) {
+        for (const sub of ['bin/makensis.exe', 'makensis.exe', 'Bin/makensis.exe']) {
+          const p = path.join(level, sub);
+          if (fs.existsSync(p)) candidates.push(p);
+        }
       }
     }
   }

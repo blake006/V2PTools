@@ -76,16 +76,29 @@ function findInCache(pattern) {
     path.join(os.homedir(), 'AppData', 'Local', 'electron-builder', 'Cache'),
   ].filter(Boolean);
 
+  const names = ['rcedit-x64.exe', 'bin/makensis.exe', 'makensis.exe', 'Bin/makensis.exe'];
   for (const root of roots) {
     if (!fs.existsSync(root)) continue;
     for (const dir of fs.readdirSync(root)) {
       if (!pattern.test(dir)) continue;
       const base = path.join(root, dir);
-      for (const name of ['rcedit-x64.exe', 'bin/makensis.exe', 'makensis.exe', 'Bin/makensis.exe']) {
-        const p = path.join(base, name);
-        if (!fs.existsSync(p)) continue;
-        if (/rcedit/.test(name)) found.rcedit = found.rcedit || p;
-        else found.makensis = found.makensis || p;
+      // 缓存目录可能是 Cache/winCodeSign/rcedit-x64.exe，
+      // 也可能是 Cache/winCodeSign/winCodeSign-2.6.0-w1/rcedit-x64.exe（解压后多一层）。
+      // 两层都要找，否则「工具明明在却报未找到」。
+      const candidates = [base];
+      try {
+        for (const sub of fs.readdirSync(base)) {
+          const p = path.join(base, sub);
+          if (fs.statSync(p).isDirectory()) candidates.push(p);
+        }
+      } catch (e) {}
+      for (const c of candidates) {
+        for (const name of names) {
+          const p = path.join(c, name);
+          if (!fs.existsSync(p)) continue;
+          if (/rcedit/.test(name)) found.rcedit = found.rcedit || p;
+          else found.makensis = found.makensis || p;
+        }
       }
     }
   }
@@ -95,10 +108,65 @@ function findInCache(pattern) {
 log('electron-builder 打包目录');
 // 直接跑 CLI 入口，避免 Node 22 下 spawnSync('npx.cmd') 的 EINVAL
 const builderCli = path.join(ROOT, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js');
-execFileSync(process.execPath, [builderCli, '--win', '--dir'], {
-  cwd: ROOT,
-  stdio: 'inherit',
-});
+
+/**
+ * electron-builder 缺本地 Electron 运行时缓存时会去 GitHub 下载，
+ * 而 GitHub Releases 经常 502 / 被代理掐断（1.5.0 构建就撞上过）。
+ * 首次失败后自动改用国内镜像重试一次，避免「代码没问题但包出不来」。
+ */
+function runBuilder(env, extraArgs = []) {
+  return spawnSync(process.execPath, [builderCli, '--win', '--dir', ...extraArgs], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env,
+  });
+}
+
+/**
+ * 离线优先：node_modules/electron/dist 里已有完整 Electron 运行时
+ * （含 electron.exe / locales / *.pak / resources）时，直接让 electron-builder
+ * 复制它，完全不联网。GitHub Releases 的 502 / 大文件下载中断就不会再卡住构建。
+ * 只有本地运行时缺失时才走下载，并带一次国内镜像重试。
+ */
+const localDist = path.join(ROOT, 'node_modules', 'electron', 'dist');
+const hasLocalDist = fs.existsSync(path.join(localDist, 'electron.exe'));
+let built;
+
+if (hasLocalDist) {
+  log('使用本地 Electron 运行时（离线构建，不下载）');
+  built = runBuilder(process.env, [`-c.electronDist=${localDist}`]);
+  if (built.status !== 0) {
+    console.log('  离线构建失败，回退到在线下载…\n');
+    built = null;
+  }
+}
+
+if (!built) {
+  built = runBuilder(process.env);
+}
+if (built.status !== 0) {
+  // app-builder 的下载器认这几个环境变量（不在 Node 侧，所以必须注入 env）。
+  // npmmirror 的目录没有 v 前缀，必须用 ELECTRON_CUSTOM_DIR 显式指定。
+  const ver = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules', 'electron', 'package.json'), 'utf8')).version;
+    } catch (e) {
+      return '32.3.3';
+    }
+  })();
+  const mirror = 'https://npmmirror.com/mirrors/electron/';
+  console.log(`\n  打包失败，改用镜像 ${mirror} 重试…\n`);
+  built = runBuilder({
+    ...process.env,
+    ELECTRON_MIRROR: mirror,
+    ELECTRON_CUSTOM_DIR: ver,
+    ELECTRON_CUSTOM_FILENAME: `electron-v${ver}-win32-x64.zip`,
+  });
+}
+if (built.status !== 0) {
+  console.error('electron-builder 打包失败');
+  process.exit(built.status || 1);
+}
 if (!fs.existsSync(EXE)) {
   console.error(`未找到 ${EXE}`);
   process.exit(1);
@@ -129,6 +197,18 @@ execFileSync(
   { stdio: 'inherit' }
 );
 console.log(`  ProductName=${APP}  FileVersion=${VERSION}.0`);
+
+/* ---------------- 2.5 应急修复脚本 ---------------- */
+log('放入独立应急修复脚本');
+// 开机后若整机断网、连 V2PTools 界面都进不去，应用内的「一键修复网络」就用不上了。
+// 把纯 cmd 脚本放在包根目录，双击即可复位系统代理（不需要启动本程序）。
+const repairSrc = path.join(ROOT, 'scripts', 'repair-network.cmd');
+if (fs.existsSync(repairSrc)) {
+  fs.copyFileSync(repairSrc, path.join(UNPACKED, 'repair-network.cmd'));
+  console.log('  repair-network.cmd 已放入包根目录');
+} else {
+  console.log('  警告：缺少 scripts/repair-network.cmd，包内将没有应急修复脚本');
+}
 
 /* ---------------- 3. zip ---------------- */
 log('压缩 zip');
@@ -162,6 +242,13 @@ const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'build-portabl
   stdio: 'inherit',
 });
 if (r.status !== 0) process.exit(r.status || 1);
+
+log('校验产物完整性');
+// 产物生成后再验一遍资源，防止「包能生成但漏了内核/驱动/规则」这种只在运行时才暴露的问题
+execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'verify-package.js')], {
+  cwd: ROOT,
+  stdio: 'inherit',
+});
 
 log('全部完成');
 for (const f of fs.readdirSync(DIST).filter((f) => /^V2PTools-.*\.(exe|zip)$/.test(f))) {

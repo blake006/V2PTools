@@ -99,6 +99,20 @@ function tcpAlive(port, timeout = 1500) {
   await check('TUN 关闭（只做系统代理，不接管全局流量）', () => assert.strictEqual(cfg.tun.enable, false));
   await check('不允许局域网连接', () => assert.strictEqual(cfg['allow-lan'], false));
   await check('DNS 开启', () => assert.strictEqual(cfg.dns.enable, true));
+  await check('不含内核已移除的 global-client-fingerprint', () => {
+    assert.ok(!Object.prototype.hasOwnProperty.call(cfg, 'global-client-fingerprint'));
+  });
+  await check('节点级 client-fingerprint 仍保留', () => {
+    const withFp = gw.buildConfig(
+      { ...node, conf: { ...node.conf, 'client-fingerprint': 'chrome' } },
+      7890,
+      7891
+    );
+    assert.strictEqual(withFp.proxies[0]['client-fingerprint'], 'chrome');
+  });
+  await check('启动日志级别为 info（失败时能看出端口有没有监听）', () => {
+    assert.strictEqual(cfg['log-level'], 'info');
+  });
 
   /* ---------------- 2. conf 残留字段不越权 ---------------- */
   const dirty = {

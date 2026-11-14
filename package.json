@@ -1,7 +1,7 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.4.10",
+  "version": "1.5.1",
   "description": "V2PTools",
   "main": "electron/main.js",
   "author": {
@@ -19,6 +19,7 @@
     "dist:zip": "node scripts/preflight.js && node scripts/build-win.js",
     "dist:exe": "node scripts/preflight.js && node scripts/build-portable.js",
     "test-sysproxy": "node scripts/test-sysproxy.js",
+    "test-netguard": "node scripts/test-netguard.js",
     "test-gateway": "node scripts/test-gateway.js",
     "test-proxystate": "node scripts/test-proxystate.js",
     "test-ruleformat": "node scripts/test-ruleformat.js",
@@ -31,7 +32,8 @@
     "icon": "electron scripts/make-icon.js",
     "fetch-rules": "node scripts/fetch-rules.js",
     "release": "node scripts/make-release.js",
-    "preflight": "node scripts/preflight.js"
+    "preflight": "node scripts/preflight.js",
+    "verify-package": "node scripts/verify-package.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",
@@ -63,6 +65,10 @@
       {
         "from": "vendor/mihomo.exe",
         "to": "core/mihomo.exe"
+      },
+      {
+        "from": "vendor/wintun.dll",
+        "to": "core/wintun.dll"
       }
     ],
     "win": {

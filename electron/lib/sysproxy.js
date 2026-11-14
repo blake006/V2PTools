@@ -8,6 +8,9 @@
  * - 修改前把原始值完整备份到 dataDir/sysproxy-backup.json，关闭代理时原样还原
  * - 修改后通过 WinINET InternetSetOption + WM_SETTINGCHANGE 广播，让已运行的程序立即生效
  * - 异常退出（崩溃 / 断电）后，下次启动可凭备份文件还原，避免系统代理被锁死在失效端口
+ * - 备份文件会随「删掉旧便携版 / 清空 userData」一起消失，所以另外在注册表
+ *   HKCU\Software\V2PTools\ProxyOwner 写一个归属标记：只要系统代理是我们开的，
+ *   哪怕配置全没了也能认出来并复位（1.5.0 之前正是这里漏了导致开机整机断网）
  */
 
 const { execFile } = require('child_process');
@@ -15,6 +18,8 @@ const fs = require('fs');
 const path = require('path');
 
 const REAL_REG_ROOT = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+/** 归属标记：不放在 Internet Settings 里，避免污染 IE/系统设置；独立于 userData */
+const OWNER_KEY = 'HKCU\\Software\\V2PTools\\ProxyOwner';
 
 const BACKUP_NAME = 'sysproxy-backup.json';
 const REFRESH_SCRIPT = 'sysproxy-refresh.ps1';
@@ -48,8 +53,24 @@ const DEFAULT_BYPASS = [
   // 注意：这里**不能**加 <-loopback>。
   // 它的语义是「取消 Windows 对回环地址的自动绕过」，
   // 加了之后 127.0.0.1 的请求也会被送进代理，本机服务（如 OpenCode 的本地端口）
-  // 就会因为节点连不通 127.0.0.1 而返回 502。
+  // 就会因为节点连不通 127.0.0.1 而返回 502；更糟的是本工具自己的
+  // 控制器 /version、其它代理工具的本地 API 也全被劫持，表现为「谁都开不了代理」。
 ].join(';');
+
+/**
+ * 清洗用户自定义 bypass：
+ *  - 去掉 <-loopback>（历史版本误加过，是「回环流量被劫持」的元凶；
+ *    去掉它即恢复 Windows 默认的回环绕过，不需要额外补条目）
+ *  - 去掉重复项
+ * 只做减法、不擅自往用户的自定义列表里加内容，避免改掉用户精心配置的规则。
+ */
+function sanitizeBypass(raw) {
+  const parts = String(raw || '')
+    .split(';')
+    .map((s) => s.trim())
+    .filter((s) => s && s !== '<-loopback>');
+  return [...new Set(parts)].join(';');
+}
 
 /* ------------------------------------------------------------------ */
 /* 底层工具                                                            */
@@ -103,6 +124,8 @@ class SystemProxy {
   constructor(opts = {}) {
     this.dataDir = opts.dataDir || process.cwd();
     this.regRoot = opts.regRoot || REAL_REG_ROOT;
+    // 归属标记键可注入：单测指向临时键，绝不碰真实 HKCU\Software\V2PTools
+    this.ownerKey = opts.ownerKey || OWNER_KEY;
     this.platform = opts.platform || process.platform;
     this.refreshEnabled = opts.refresh !== false;
     // 命令执行器，测试时可注入假实现
@@ -149,7 +172,7 @@ class SystemProxy {
       proxyServer: pick('ProxyServer') || '',
       proxyOverride: pick('ProxyOverride') || '',
       autoConfigUrl: pick('AutoConfigURL') || '',
-      autoDetect: pick('AutoDetect') ? 1 : 0,
+      autoDetect: Number(pick('AutoDetect')) ? 1 : 0,
     };
   }
 
@@ -181,8 +204,9 @@ class SystemProxy {
     await put('ProxyOverride', 'REG_SZ', snap.proxyOverride);
     await put('AutoConfigURL', 'REG_SZ', snap.autoConfigUrl);
     // AutoDetect（WPAD 自动检测）必须一起还原：开启代理时我们会把它关掉，
-    // 不还原的话用户原有的「自动检测设置」就被永久改了
-    await put('AutoDetect', 'REG_SZ', snap.autoDetect ? '1' : '0');
+    // 不还原的话用户原有的「自动检测设置」就被永久改了。
+    // 类型是 REG_DWORD，不能写成 REG_SZ —— 之前写错类型会让 read() 把 '0' 当成真值。
+    await put('AutoDetect', 'REG_DWORD', snap.autoDetect ? 1 : 0);
     return true;
   }
 
@@ -207,6 +231,49 @@ class SystemProxy {
     try {
       fs.unlinkSync(this.backupPath);
     } catch (e) {}
+  }
+
+  /* ---------------- 归属标记 ---------------- */
+
+  /**
+   * 「这次系统代理是我开的」写进注册表。
+   * 必须先写标记再改 ProxyEnable：万一写到一半进程被杀，
+   * 下次启动至少还能据此认出这个 127.0.0.1:xxxx 是孤儿。
+   */
+  async markOwner(server, extra = {}) {
+    if (!this.supported) return false;
+    const vals = {
+      Target: server,
+      StartedAt: new Date().toISOString(),
+      Pid: String(process.pid),
+      Winhttp: extra.winhttp ? '1' : '0',
+    };
+    for (const [name, value] of Object.entries(vals)) {
+      // eslint-disable-next-line no-await-in-loop
+      await this.run('reg', ['add', this.ownerKey, '/v', name, '/t', 'REG_SZ', '/d', value, '/f']);
+    }
+    return true;
+  }
+
+  async readOwner() {
+    if (!this.supported) return null;
+    const r = await this.run('reg', ['query', this.ownerKey]);
+    if (!r.ok) return null;
+    const vals = parseRegQuery(r.stdout);
+    const target = vals.Target ? String(vals.Target.value) : '';
+    if (!target) return null;
+    return {
+      target,
+      startedAt: vals.StartedAt ? String(vals.StartedAt.value) : '',
+      pid: vals.Pid ? Number(vals.Pid.value) || 0 : 0,
+      winhttp: !!(vals.Winhttp && String(vals.Winhttp.value) === '1'),
+    };
+  }
+
+  async clearOwner() {
+    if (!this.supported) return false;
+    const r = await this.run('reg', ['delete', this.ownerKey, '/f']);
+    return r.ok;
   }
 
   /* ---------------- 生效刷新 ---------------- */
@@ -262,8 +329,13 @@ class SystemProxy {
     const host = opts.host || '127.0.0.1';
     const port = Number(opts.port);
     if (!port) throw new Error('缺少代理端口');
-    const bypass = opts.bypass || DEFAULT_BYPASS;
+    // 用户自定义里可能残留历史版本的 <-loopback>，必须清掉：
+    // 它会让 127.0.0.1 也走代理，连本工具自己的控制器和其它代理工具的本地 API 都连不上
+    const bypass = sanitizeBypass(opts.bypass || DEFAULT_BYPASS);
     const server = `${host}:${port}`;
+
+    // 先写归属标记，再动 ProxyEnable。中途被强杀也能靠它认出孤儿设置。
+    await this.markOwner(server, { winhttp: !!opts.winhttp });
 
     // 已有备份说明是我们自己开的，不要用当前（已被我们改过的）值覆盖原始备份
     if (!this.readBackup()) {
@@ -290,7 +362,7 @@ class SystemProxy {
       await this.deleteValue('AutoConfigURL');
       // WPAD 自动检测同样会抢走手动代理设置（部分程序优先用它），必须关掉；
       // 原值已备份，关闭代理时会还原
-      await this.setValue('AutoDetect', 'REG_SZ', '0');
+      await this.setValue('AutoDetect', 'REG_DWORD', 0);
     } catch (err) {
       this.lastError = err.message;
       // 写入失败则尽量回滚，避免系统代理停在半配置状态
@@ -322,30 +394,67 @@ class SystemProxy {
   async restore() {
     if (!this.supported) return { ok: false, error: '仅支持 Windows' };
     const bk = this.readBackup();
+    const owner = await this.readOwner();
     try {
       if (bk && bk.values) {
         await this.writeSnapshot(bk.values);
       } else {
-        // 没有备份：只关掉开关，保留用户原有的 ProxyServer 值
-        await this.setValue('ProxyEnable', 'REG_DWORD', 0);
+        // 备份丢了（删掉旧便携版 / 清空 userData）：不能只关开关就完事。
+        // ProxyServer 若还指向我们那个已经死掉的端口，某些程序/下次开机仍会去连它。
+        await this.forceDirect(owner ? owner.target : '');
       }
     } catch (err) {
       this.lastError = err.message;
+      // 兜底：哪怕 writeSnapshot 半路失败，也先把开关关掉，
+      // 绝不能把用户留在「系统代理指向死端口」的整机断网状态
+      await this.setValue('ProxyEnable', 'REG_DWORD', 0).catch(() => {});
+      await this.refresh().catch(() => {});
       throw err;
     }
     this.clearBackup();
+    await this.clearOwner();
     this.expected = null;
     await this.refresh();
 
     // 只有我们真的改过 WinHTTP 才还原，避免误重置用户已有的 WinHTTP 代理
-    if (this.winhttpApplied || (bk && bk.winhttp)) {
+    if (this.winhttpApplied || (bk && bk.winhttp) || (owner && owner.winhttp)) {
       const r = await this.run('netsh', ['winhttp', 'reset', 'proxy'], 8000);
       if (!r.ok) {
-        /* 需要管理员权限，忽略 */
+        this.lastError = 'WinHTTP 代理还原失败（通常需要管理员权限），可在「一键修复网络」里重试';
       }
       this.winhttpApplied = false;
     }
     return { ok: true };
+  }
+
+  /**
+   * 无备份时的强制直连：只清理「确定是我们留下的」痕迹，不碰用户其它设置。
+   *  - ProxyEnable 归零
+   *  - ProxyServer 只在等于我们的 target（或本工具默认端口段）时删除
+   *  - ProxyOverride 去掉 <-loopback>，避免回环继续被劫持
+   *  - AutoConfigURL 指向本机且已失效时删除
+   */
+  async forceDirect(target = '') {
+    const cur = await this.read();
+    await this.setValue('ProxyEnable', 'REG_DWORD', 0);
+    if (cur && cur.proxyServer) {
+      const isOurs = (target && cur.proxyServer === target) || /^127\.0\.0\.1:789\d$/.test(cur.proxyServer);
+      if (isOurs) await this.deleteValue('ProxyServer');
+    }
+    if (cur && cur.proxyOverride && /<-loopback>/i.test(cur.proxyOverride)) {
+      await this.setValue('ProxyOverride', 'REG_SZ', sanitizeBypass(cur.proxyOverride));
+    }
+    // 只清本工具的 PAC：用户自己 / 公司内网部署的本地 PAC 不能动
+    if (
+      cur &&
+      cur.autoConfigUrl &&
+      (/v2ptools/i.test(cur.autoConfigUrl) || /^https?:\/\/(?:127\.0\.0\.1|localhost):789\d/i.test(cur.autoConfigUrl))
+    ) {
+      await this.deleteValue('AutoConfigURL');
+    }
+    await this.clearOwner();
+    await this.refresh();
+    return true;
   }
 
   /** 关闭系统代理（restore 的别名，语义更清楚） */
@@ -354,22 +463,28 @@ class SystemProxy {
   }
 
   /**
-   * 启动时检查是否有上次异常退出遗留的代理设置
-   * 只有当前 ProxyServer 正好等于我们写入的地址时才还原，避免误改用户手动设置的代理
+   * 启动时检查是否有上次异常退出遗留的代理设置。
+   *
+   * 归属标记优先级高于备份文件：备份会随 userData 一起被删掉（用户删了旧便携版就发生过），
+   * 但注册表标记还在，仍能认出「这个 127.0.0.1 是我们开的」并复位。
+   * 只有当前 ProxyServer 正好等于我们写入的地址时才动，避免误改用户手动设置的代理。
    */
   async recoverIfStale() {
     const bk = this.readBackup();
-    if (!bk || !bk.values) return { recovered: false };
+    const owner = await this.readOwner();
+    const target = (bk && bk.target) || (owner && owner.target) || '';
+    if (!target) return { recovered: false };
     const cur = await this.read();
     if (!cur) return { recovered: false };
-    const same = bk.target && cur.proxyServer === bk.target;
+    const same = cur.proxyServer === target;
     if (!same) {
-      // 用户已经自己改过代理，备份失效，直接丢弃备份
+      // 用户已经自己改过代理，两个标记都失效，清掉免得以后误判
       this.clearBackup();
+      await this.clearOwner();
       return { recovered: false, dropped: true };
     }
     await this.restore();
-    return { recovered: true, target: bk.target, original: bk.values };
+    return { recovered: true, target, original: bk && bk.values ? bk.values : null, viaOwner: !bk };
   }
 
   /** 当前状态 */
@@ -379,8 +494,10 @@ class SystemProxy {
     }
     const cur = await this.read();
     const bk = this.readBackup();
+    const owner = await this.readOwner();
     const server = cur ? cur.proxyServer : '';
-    const active = !!(cur && cur.proxyEnable === 1 && server && bk && bk.target === server);
+    const ourTarget = (bk && bk.target) || (owner && owner.target) || '';
+    const active = !!(cur && cur.proxyEnable === 1 && server && ourTarget && ourTarget === server);
     return {
       supported: true,
       active,
@@ -388,11 +505,13 @@ class SystemProxy {
       bypass: cur ? cur.proxyOverride : '',
       proxyEnable: cur ? cur.proxyEnable : 0,
       autoConfigUrl: cur ? cur.autoConfigUrl : '',
+      autoDetect: cur ? cur.autoDetect : 0,
       backup: bk ? { createdAt: bk.createdAt, target: bk.target, original: bk.values } : null,
+      owner: owner || null,
       lastError: this.lastError,
       refreshedAt: this.lastRefreshAt,
     };
   }
 }
 
-module.exports = { SystemProxy, DEFAULT_BYPASS, REAL_REG_ROOT, TRACKED, parseRegQuery };
+module.exports = { SystemProxy, DEFAULT_BYPASS, REAL_REG_ROOT, OWNER_KEY, TRACKED, sanitizeBypass, parseRegQuery };

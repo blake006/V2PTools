@@ -12,6 +12,8 @@ const path = require('path');
 const net = require('net');
 const http = require('http');
 const yaml = require('js-yaml');
+const { sanitizeConfig, validateConfig, diagnoseStart, briefError } = require('./coreCompat');
+const { cleanupStale, writePid, removePid } = require('./procCleanup');
 
 const PORT_BASE = 23400;
 const PORT_MAX = 29000;
@@ -59,6 +61,7 @@ class CoreManager {
     this.onLog = opts.onLog || (() => {});
     this.proc = null;
     this.configPath = path.join(this.dataDir, 'config.yaml');
+    this.pidFile = path.join(this.dataDir, 'core.pid');
     this.ctlPort = 0;
     this.portMap = new Map(); // nodeId -> local port
     this.nodeNameMap = new Map(); // nodeId -> core proxy name
@@ -129,7 +132,8 @@ class CoreManager {
       ],
       rules: ['MATCH,DIRECT'],
     };
-    return cfg;
+    // 检测内核与网关内核共用同一套兼容清洗，避免「网关能起、检测起不来」
+    return sanitizeConfig(cfg).config;
   }
 
   async start(nodes) {
@@ -141,6 +145,12 @@ class CoreManager {
         throw new Error('未找到内核文件 mihomo.exe');
       }
       if (!nodes || !nodes.length) throw new Error('没有可用的节点');
+
+      // 上次若被强杀/崩溃，可能残留一个 mihomo 占着端口。启动前先安全清理
+      // （只杀 pid 对得上且进程名确实是 mihomo 的，避免误杀复用 pid 的其它程序）
+      try {
+        cleanupStale(this.pidFile);
+      } catch (e) {}
 
       this.portMap.clear();
       this.nodeNameMap.clear();
@@ -155,6 +165,11 @@ class CoreManager {
       fs.mkdirSync(this.dataDir, { recursive: true });
       fs.writeFileSync(this.configPath, yaml.dump(cfg, { lineWidth: 4096, noRefs: true }), 'utf8');
 
+      if (fs.existsSync(this.corePath)) {
+        const pre = await validateConfig(this.corePath, this.configPath, this.dataDir);
+        if (!pre.ok) throw new Error('检测内核配置校验失败：' + pre.reason);
+      }
+
       const errLog = path.join(this.dataDir, 'core.log');
       const out = fs.openSync(errLog, 'w');
 
@@ -163,6 +178,7 @@ class CoreManager {
         windowsHide: true,
         stdio: ['ignore', out, out],
       });
+      writePid(this.pidFile, this.proc.pid);
 
       this.proc.on('exit', (code, signal) => {
         this.running = false;
@@ -176,8 +192,12 @@ class CoreManager {
       const ok = await this.waitReady(15000);
       if (!ok) {
         const log = this.readLog();
+        const alive = !!(this.proc && this.proc.exitCode === null);
         await this.stop();
-        throw new Error('内核启动失败: ' + this.briefError(log));
+        throw new Error(
+          '检测内核启动失败：' +
+            diagnoseStart({ log, procAlive: alive, exitCode: null, ctlPort: this.ctlPort, mixedPort: 0, timedOut: true })
+        );
       }
       this.running = true;
       return { ports: this.portMap, ctlPort: this.ctlPort };
@@ -194,13 +214,9 @@ class CoreManager {
     }
   }
 
-  /** 从内核日志里提取一行最可读的错误信息 */
+  /** 从内核日志里提取一句真正的失败原因（与网关共用兼容层） */
   briefError(log) {
-    const lines = String(log || '').split('\n').filter(Boolean);
-    const errLine = lines.find((l) => /level=(error|fatal)/i.test(l));
-    const pick = errLine || lines[lines.length - 1] || '未知错误';
-    const m = /msg="?([^"]+)"?$/.exec(pick);
-    return (m ? m[1] : pick).slice(0, 160);
+    return briefError(log);
   }
 
   async waitReady(timeout) {
@@ -237,6 +253,7 @@ class CoreManager {
       }
       this.proc = null;
     }
+    removePid(this.pidFile);
     this.running = false;
   }
 }

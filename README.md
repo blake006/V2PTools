@@ -328,13 +328,19 @@ npm run dist
 
 ### 版本号
 
-统一 **`1.0.X` 顺次递增**（1.0.0 → 1.0.1 → 1.0.2 …）：
+**patch 位只到 9，跳过 `.10`**：`1.4.0 → … → 1.4.9 → 1.5.0 → 1.5.1 …`。
+`.9` 之后直接进位到下一个 minor 的 `.0`，不产生 `.10` 版本。
+
+> 历史版本 `1.4.10` 是旧规则（patch 到 10 才进位）留下的例外，保留不回退；从 `1.5.0` 起严格执行新规则。
 
 ```bash
-npm run bump            # patch 位 +1，同步 package.json 与 build/portable.nsi
-npm run bump -- 1.0.7   # 或显式指定
+npm run bump            # 按规则自动进位，同步 package.json 与 build/portable.nsi
+npm run bump -- 1.5.0   # 或显式指定
 npm run dist            # 产物文件名与 exe 内嵌版本号自动跟着变
 ```
+
+发版时 `package.json`、`build/portable.nsi`、`V2PTools-<版本>-win-x64.zip`、
+`V2PTools-<版本>-win-x64-portable.exe` 与 Release tag `v<版本>` 必须完全一致。
 
 ### 图标
 

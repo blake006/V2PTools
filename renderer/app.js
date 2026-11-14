@@ -373,7 +373,7 @@ function rowHtml(n) {
     <td data-col="c1" class="col-status"><span class="status-dot ${n.status === 'ok' ? 'ok' : n.status === 'fail' ? 'fail' : n.status === 'testing' ? 'testing' : ''}" title="${esc(n.error || '')}"></span></td>
     <td data-col="c2" class="col-name">
       <div class="name-cell">
-        <span class="badge ${n.type}">${esc(typeLabel)}</span>
+        <span class="badge ${esc(n.type)}">${esc(typeLabel)}</span>
         ${n.favorite ? '<span class="fav-star" title="已收藏，排序时置顶">★</span>' : ''}
         <span class="name-text" title="${esc(n.name)}">${esc(n.name || n.server)}</span>
         ${n.note ? `<span class="pill note" title="${esc(n.note)}">${esc(n.note)}</span>` : ''}
@@ -1431,7 +1431,7 @@ function openDrawer(id) {
   const n = state.nodes.find((x) => x.id === id);
   if (!n) return;
   $('#drawerTitle').textContent = n.name || n.server;
-  $('#drawerSub').innerHTML = `<span class="badge ${n.type}">${esc(TYPE_LABEL[n.type] || n.type)}</span>
+  $('#drawerSub').innerHTML = `<span class="badge ${esc(n.type)}">${esc(TYPE_LABEL[n.type] || n.type)}</span>
     <span style="margin-left:6px">${esc(n.server)}:${n.port}</span>`;
 
   const kv = (k, v) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`;
@@ -2138,22 +2138,131 @@ async function startTunMode() {
 
   if (!ready || !ready.ok) {
     const reasons = (ready && ready.reasons) || ['未知原因'];
+    const tail = '\n\nTUN 只是接管方式之一，「系统代理」不需要虚拟网卡、也不需要管理员权限，普通上网用它即可。';
     if (ready && ready.hasWintun === false) {
-      alert('无法开启 TUN：\n\n' + reasons.join('\n'));
-    } else if (ready && !ready.admin) {
+      const useSystem = confirm(
+        '无法开启 TUN：\n\n' + reasons.join('\n') + tail + '\n\n是否改用「系统代理」立即开启？'
+      );
+      if (useSystem) return enableSystemProxyById(id, 'system');
+    } else if (ready && ready.canElevate) {
       const ok = confirm('TUN 模式需要管理员权限：\n\n' + reasons.join('\n') + '\n\n是否以管理员身份重启 V2PTools？');
       if (ok) {
         toast('正在以管理员身份重启…');
         await window.api.relaunchElevated();
+      } else if (confirm('不提权的话也可以直接用「系统代理」。是否现在改用系统代理？')) {
+        return enableSystemProxyById(id, 'system');
       }
     } else {
-      alert('无法开启 TUN 全局：\n\n' + reasons.join('\n'));
+      alert('无法开启 TUN 全局：\n\n' + reasons.join('\n') + tail);
     }
     setStatus('');
     return;
   }
 
   return enableSystemProxyById(id, 'tun');
+}
+
+/* ------------------------------------------------------------------ */
+/* 网络安全护栏：体检 / 一键修复                                        */
+/* ------------------------------------------------------------------ */
+
+function renderNetFindings(r) {
+  const list = (r && r.findings) || [];
+  if (!list.length) return '  ✓ 未发现会导致断网的残留';
+  return list
+    .map((f) => `  ${f.level === 'critical' ? '✗' : f.level === 'warn' ? '⚠' : '·'} ${f.title}\n      ${f.detail}`)
+    .join('\n');
+}
+
+/** 只体检，不改动任何系统设置 */
+async function inspectNetwork() {
+  setStatus('正在检查网络设置…');
+  let r;
+  try {
+    r = await window.api.netInspect();
+  } catch (err) {
+    setStatus('');
+    return toast('体检失败：' + cleanErr(err), 'err', 6000);
+  }
+  const wininet = r.wininet || {};
+  alert(
+    '网络安全体检（只读，未修改任何设置）\n\n' +
+      renderNetFindings(r) +
+      '\n\n当前设置：\n' +
+      `  ProxyEnable = ${wininet.proxyEnable}\n` +
+      `  ProxyServer = ${wininet.proxyServer || '（空）'}\n` +
+      `  WinHTTP = ${r.winhttp && r.winhttp.enabled ? r.winhttp.server : '直接访问'}\n` +
+      `  本机直连 = ${r.direct && r.direct.ok ? '正常' : '不通（与代理无关）'}\n` +
+      `  回环自连 = ${r.loopbackOk ? '正常' : '失败'}\n` +
+      `  归属标记 = ${r.owner ? r.owner.target : '无'}`
+  );
+  setStatus(r.ok ? '网络体检：正常' : '网络体检：发现残留，可用「一键修复网络」');
+  return r;
+}
+
+/** 定点修复：只清「本工具留下的、端口已死」的项 */
+async function repairNetwork() {
+  let before;
+  try {
+    before = await window.api.netInspect();
+  } catch (err) {
+    return toast('体检失败：' + cleanErr(err), 'err', 6000);
+  }
+  const critical = (before.findings || []).filter((f) => f.level === 'critical');
+  if (!critical.length && !(before.findings || []).length) {
+    return toast('网络设置正常，无需修复', 'ok');
+  }
+  const lines = [
+    '检测到以下可能影响上网的设置：',
+    '',
+    renderNetFindings(before),
+    '',
+    '修复内容：关闭失效的系统代理开关、清除失效地址 / PAC / WinHTTP、移除 <-loopback>、刷新 DNS。',
+    '不会修改其它代理软件正在使用、端口仍存活的设置。',
+    '',
+    '确定现在修复吗？',
+  ];
+  if (!confirm(lines.join('\n'))) return;
+
+  setStatus('正在修复网络设置…');
+  let r;
+  try {
+    r = await window.api.netRepair();
+  } catch (err) {
+    setStatus('');
+    return toast('修复失败：' + cleanErr(err), 'err', 8000);
+  }
+  const actions = r.actions || [];
+  alert(
+    (r.ok ? '✓ 网络已修复' : '⚠ 修复未完成') + '\n\n' +
+      (r.summary || '') +
+      '\n\n处理明细：\n' +
+      (actions.length ? actions.map((a) => `  ${a.ok ? '✓' : '✗'} ${a.label}${a.message ? '：' + a.message : ''}`).join('\n') : '  （无需改动）') +
+      '\n\n复查结果：\n' +
+      (r.after ? renderNetFindings(r.after) : '  复查未完成（' + (r.error || '未知原因') + '）') +
+      (r.ok ? '' : '\n\n若提示需要管理员权限，请右键以管理员身份运行 V2PTools 后重试。')
+  );
+  toast(r.ok ? '网络已修复，可重新开启代理' : '修复未完成，详见提示', r.ok ? 'ok' : 'warn', 6000);
+  setStatus(r.ok ? '网络修复完成' : '网络修复未完成');
+  await refreshProxyState().catch(() => {});
+  return r;
+}
+
+$('#menuNetRepair').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#proxyMenu').classList.remove('open');
+  repairNetwork();
+});
+$('#btnRepairNetwork').addEventListener('click', () => repairNetwork());
+$('#btnNetInspect').addEventListener('click', () => inspectNetwork());
+
+// 开机自愈的结果：窗口加载完由主进程推过来，明确告诉用户「为什么刚才代理是关着的」
+if (window.api.onNetGuardNotice) {
+  window.api.onNetGuardNotice((n) => {
+    if (!n) return;
+    toast(n.title + '：' + n.text, n.level === 'err' ? 'err' : 'warn', 9000);
+    setStatus(n.title);
+  });
 }
 
 /** 链路自检：直连 IP vs 经代理 IP，一眼看出代理到底有没有生效 */
@@ -2227,6 +2336,18 @@ $('#menuProxyCheck').addEventListener('click', async (e) => {
     lines.push('');
     lines.push('⚠ 环境冲突：' + r.conflicts.summary);
     lines.push('如果只是进程在跑、没开 TUN，通常不影响；代理不通时再考虑退出它们');
+  }
+  // 护栏体检：开机残留 / 回环劫持 / WinHTTP 残留会直接影响「代理到底能不能开」
+  if (r.guard) {
+    lines.push('');
+    if (r.guard.findings && r.guard.findings.length) {
+      lines.push('⚠ 网络安全体检发现残留（可用「一键修复网络」清理）：');
+      lines.push(renderNetFindings(r.guard));
+    } else {
+      lines.push('✓ 网络安全体检：无失效代理残留');
+    }
+    if (r.guard.direct && !r.guard.direct.ok) lines.push('⚠ 本机直连不通，请先检查网卡 / DNS（与代理无关）');
+    if (r.guard.loopbackOk === false) lines.push('⚠ 127.0.0.1 回环自连失败，检查安全软件或残留 TUN 路由');
   }
   if (r.gateway.node) lines.push(`\n节点：${r.gateway.node.name}（${r.gateway.node.server}:${r.gateway.node.port}）`);
   alert(lines.join('\n'));

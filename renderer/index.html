@@ -93,6 +93,7 @@
             <button data-route="proxy-list"><b>仅名单代理</b><span>只有名单内站点走节点</span></button>
             <div class="menu-head">排查</div>
             <button id="menuProxyCheck"><b>链路自检</b><span>对比直连 IP 与代理出口 IP</span></button>
+            <button id="menuNetRepair"><b>一键修复网络</b><span>清理失效代理 / PAC / WinHTTP / 回环劫持</span></button>
           </div>
         </div>
       </div>
@@ -453,8 +454,16 @@
         </div>
         <label class="switch-line">
           <input type="checkbox" id="setProxyWinhttp" />
-          <span>同时写入 WinHTTP 代理（影响系统服务，通常需要管理员权限）</span>
+          <span>同时写入 WinHTTP 代理（影响系统服务，通常需要管理员权限；非必要不建议开启）</span>
         </label>
+        <div class="data-actions" style="margin-top:8px">
+          <button class="btn btn-mini" id="btnRepairNetwork">一键修复网络</button>
+          <button class="btn btn-mini" id="btnNetInspect">仅体检，不修改</button>
+        </div>
+        <p class="dim" style="font-size:11.5px;line-height:1.5;margin:6px 0 0">
+          关机 / 强杀后若系统代理仍指向已失效的本地端口，会导致整机（包括其它代理工具）都上不了网。
+          修复只清理「确定是本工具留下、且端口已死」的设置，不会动别人正在用的代理。
+        </p>
         <div class="section-title">订阅拉取</div>
         <div class="field">
           <label>拉取订阅使用的代理</label>

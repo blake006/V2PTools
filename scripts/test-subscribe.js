@@ -17,7 +17,14 @@
 
 const http = require('http');
 const { app } = require('electron');
-const { fetchSubscription, fetchWithNet, normalizeProxy, detectLocalProxy } = require('../electron/lib/subscribe');
+const {
+  fetchSubscription,
+  fetchWithNet,
+  normalizeProxy,
+  detectLocalProxy,
+  isBlockedHost,
+  assertSafeUrl,
+} = require('../electron/lib/subscribe');
 
 app.commandLine.appendSwitch('host-resolver-rules', 'MAP sub.test 127.0.0.1');
 
@@ -143,6 +150,56 @@ async function main() {
     !!hintErr && new RegExp(`127\\.0\\.0\\.1:${proxy.port} 有代理在监听`).test(hintErr.message),
     hintErr && hintErr.message
   );
+
+  // 8) SSRF 防护：本机 / 内网 / 链路本地 / 云元数据地址必须被拦截
+  const blockedHosts = [
+    '127.0.0.1', '127.1.2.3', 'localhost', 'localhost.', 'foo.localhost',
+    '10.0.0.5', '172.16.0.1', '172.31.255.255', '192.168.1.1',
+    '169.254.169.254', '0.0.0.0', '100.64.0.1', '224.0.0.1',
+    '::1', 'fe80::1', 'fc00::1', 'fd12:3456::1', '::ffff:127.0.0.1',
+  ];
+  const allowedHosts = ['example.com', 'sub.test', '8.8.8.8', '1.1.1.1', '2001:4860:4860::8888'];
+  for (const h of blockedHosts) ok('拦截内网地址 ' + h, isBlockedHost(h) === true);
+  for (const h of allowedHosts) ok('放行公网地址 ' + h, isBlockedHost(h) === false);
+
+  let protoErr = null;
+  try {
+    assertSafeUrl('file:///C:/Windows/win.ini');
+  } catch (e) {
+    protoErr = e;
+  }
+  ok('拒绝 file:// 协议', !!protoErr);
+
+  let ctlErr = null;
+  try {
+    assertSafeUrl('http://127.0.0.1:9090/configs');
+  } catch (e) {
+    ctlErr = e;
+  }
+  ok('拒绝本机控制器地址', !!ctlErr && /内网/.test(ctlErr.message), ctlErr && ctlErr.message);
+
+  // 集成：直接拿本机地址拉订阅必须失败，且提示是「内网拦截」而非网络错误
+  let localFetchErr = null;
+  try {
+    await fetchSubscription(`http://127.0.0.1:${targetPort}/sub`, { timeout: 2000 });
+  } catch (e) {
+    localFetchErr = e;
+  }
+  ok('fetchSubscription 拒绝本机地址', !!localFetchErr && /内网/.test(localFetchErr.message), localFetchErr && localFetchErr.message);
+
+  // 重定向到内网也要被逐跳校验拦住
+  const redir = await listen((req, res) => {
+    res.writeHead(302, { Location: `http://127.0.0.1:${targetPort}/sub` });
+    res.end();
+  });
+  let redirErr = null;
+  try {
+    await fetchWithNet(`http://sub.test:${redir.port}/r`, 4000);
+  } catch (e) {
+    redirErr = e;
+  }
+  ok('重定向到内网被拦截', !!redirErr && /内网/.test(redirErr.message), redirErr && redirErr.message);
+  redir.srv.close();
 
   target.srv.close();
   hang.srv.closeAllConnections();

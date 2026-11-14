@@ -36,6 +36,8 @@ const yaml = require('js-yaml');
 const { isPortFree } = require('./core');
 const { fetchExitIP } = require('./tester');
 const { validatePayload } = require('./ruleFormat');
+const { sanitizeConfig, validateConfig, diagnoseStart, briefError } = require('./coreCompat');
+const { cleanupStale, writePid, removePid } = require('./procCleanup');
 
 const DEFAULT_PORT = 7890;
 const PORT_SCAN_MAX = 200;
@@ -58,9 +60,9 @@ const RULE_FILES = {
   'gfw-domain': { file: 'gfw-domain.yaml', behavior: 'domain' },
 };
 
-function httpGet(port, urlPath, timeout = 1200) {
+function httpGet(port, urlPath, timeout = 1200, host = '127.0.0.1') {
   return new Promise((resolve, reject) => {
-    const req = http.get({ host: '127.0.0.1', port, path: urlPath, timeout }, (res) => {
+    const req = http.get({ host, port, path: urlPath, timeout }, (res) => {
       let body = '';
       res.on('data', (c) => (body += c));
       res.on('end', () => resolve({ status: res.statusCode, body }));
@@ -70,9 +72,9 @@ function httpGet(port, urlPath, timeout = 1200) {
   });
 }
 
-function tcpAlive(port, timeout = 800) {
+function tcpAlive(port, timeout = 800, host = '127.0.0.1') {
   return new Promise((resolve) => {
-    const sock = net.connect({ host: '127.0.0.1', port });
+    const sock = net.connect({ host, port });
     const done = (v) => {
       try {
         sock.destroy();
@@ -114,8 +116,11 @@ class Gateway {
     this.lastError = '';
     this.lastProbe = null;
     this.rulesReady = false;
+    this.lastExitCode = null;
+    this.degraded = false; // 控制器没起来、但代理端口可用时的降级状态
     this.configPath = path.join(this.dataDir, 'gateway.yaml');
     this.logPath = path.join(this.dataDir, 'gateway.log');
+    this.pidFile = path.join(this.dataDir, 'gateway.pid');
   }
 
   /* ---------------- 配置 ---------------- */
@@ -215,7 +220,11 @@ class Gateway {
       'mixed-port': port,
       'allow-lan': false,
       mode: 'rule',
-      'log-level': 'warning',
+      // 启动阶段用 info：能否监听端口、控制器有没有起来，都写在日志里。
+      // 旧值 warning 会把这些 info 全吞掉，启动失败时只剩一句无关的 error 提示，
+      // 排障时根本分不清「内核没起来」还是「起来了但连不上」。
+      // 就绪后会通过 external-controller 降回 warning，避免连接日志把文件撑大。
+      'log-level': 'info',
       ipv6: false,
       'external-controller': `127.0.0.1:${ctlPort}`,
       'unified-delay': true,
@@ -223,7 +232,9 @@ class Gateway {
       'find-process-mode': 'off',
       'geo-auto-update': false,
       'geodata-mode': false,
-      'global-client-fingerprint': conf['client-fingerprint'] || undefined,
+      // 不要写 global-client-fingerprint：mihomo 1.19.x 已移除该顶层字段，
+      // 写了会打一条 level=error（虽然不影响启动，但会被误当成失败原因）。
+      // 节点自带的 client-fingerprint 随 conf 展开进 proxies[0]，那才是新内核认可的位置。
       profile: { 'store-selected': false, 'store-fake-ip': false },
       tun: opts.tun
         ? {
@@ -284,7 +295,8 @@ class Gateway {
       rules: routing.rules,
     };
     if (routing.providers) cfg['rule-providers'] = routing.providers;
-    return cfg;
+    // 兜底：以后内核再移除字段，只需在 coreCompat 里登记，不用改每个生成点
+    return sanitizeConfig(cfg).config;
   }
 
   readLog() {
@@ -295,12 +307,9 @@ class Gateway {
     }
   }
 
+  /** 统一走兼容层：只认真正的致命错误，不拿日志里第一条 error 冒充失败原因 */
   briefError(log) {
-    const lines = String(log || '').split('\n').filter(Boolean);
-    const errLine = lines.find((l) => /level=(error|fatal)/i.test(l));
-    const pick = errLine || lines[lines.length - 1] || '未知错误';
-    const m = /msg="?([^"]+)"?$/.exec(pick);
-    return (m ? m[1] : pick).slice(0, 200);
+    return briefError(log);
   }
 
   /* ---------------- 生命周期 ---------------- */
@@ -308,6 +317,11 @@ class Gateway {
   async start(node, opts = {}) {
     if (!node) throw new Error('未选择节点');
     if (!this.corePath || !fs.existsSync(this.corePath)) throw new Error('未找到内核文件 mihomo.exe，请先执行 npm run fetch-core');
+
+    // 清理上次被强杀/崩溃残留的内核（只杀 pid 对得上且进程名匹配的）
+    try {
+      cleanupStale(this.pidFile);
+    } catch (e) {}
 
     await this.stop({ silent: true });
 
@@ -320,11 +334,20 @@ class Gateway {
     this.routeMode = ROUTE_MODES[opts.routeMode] ? opts.routeMode : 'global';
     this.tunMode = !!opts.tun;
     this.lastError = '';
+    this.degraded = false;
 
     const cfg = this.buildConfig(node, port, ctlPort, { routeMode: this.routeMode, tun: this.tunMode });
     fs.mkdirSync(this.dataDir, { recursive: true });
     this.ensureLocalRules();
     fs.writeFileSync(this.configPath, yaml.dump(cfg, { lineWidth: 4096, noRefs: true }), 'utf8');
+
+    // 启动前让内核自己校验一次配置：真正的格式/协议错误立刻报，不用干等 15 秒超时。
+    // 只对真实存在内核的场合生效（单测里常传占位路径）。
+    if (fs.existsSync(this.corePath)) {
+      const pre = await validateConfig(this.corePath, this.configPath, this.dataDir);
+      if (!pre.ok) throw new Error('代理内核配置校验失败：' + pre.reason);
+      if (pre.warnings && pre.warnings.length) this.onLog('内核兼容提示（不影响启动）：' + pre.warnings.join('；'));
+    }
 
     const out = fs.openSync(this.logPath, 'w');
     this.proc = spawn(this.corePath, ['-d', this.dataDir, '-f', this.configPath], {
@@ -332,13 +355,16 @@ class Gateway {
       windowsHide: true,
       stdio: ['ignore', out, out],
     });
+    writePid(this.pidFile, this.proc.pid);
     // 子进程已持有句柄，父进程这份要关掉，否则日志文件一直被占用
     try {
       fs.closeSync(out);
     } catch (e) {}
 
+    this.lastExitCode = null;
     this.proc.on('exit', (code) => {
       const wasRunning = this.running;
+      this.lastExitCode = code;
       this.running = false;
       this.proc = null;
       if (wasRunning && code !== 0 && code !== null) {
@@ -351,8 +377,24 @@ class Gateway {
     const ready = await this.waitReady(15000);
     if (!ready) {
       const log = this.readLog();
+      const procAlive = !!(this.proc && this.proc.exitCode === null);
+      // 端口没被占用 = 内核压根没监听成功；被占用 = 有别的程序抢了端口
+      let portBusy = null;
+      try {
+        portBusy = !(await isPortFree(this.port));
+      } catch (e) {}
       await this.stop({ silent: true });
-      throw new Error('代理内核启动失败：' + this.briefError(log));
+      const diagnosis = diagnoseStart({
+        log,
+        procAlive,
+        exitCode: this.lastExitCode,
+        ctlPort: this.ctlPort,
+        mixedPort: this.port,
+        portBusy,
+        timedOut: true,
+      });
+      this.lastError = diagnosis;
+      throw new Error('代理内核启动失败：' + diagnosis);
     }
 
     // 关键：等分流规则集真正加载完再宣告就绪。
@@ -368,13 +410,37 @@ class Gateway {
 
   async waitReady(timeout) {
     const deadline = Date.now() + timeout;
+    let degradedSince = 0;
     while (Date.now() < deadline) {
       if (!this.proc) return false;
+      // 双地址尝试：某些机器上 127.0.0.1 被 hosts / 防火墙改写，localhost 仍可用
       // eslint-disable-next-line no-await-in-loop
-      const ctlOk = await httpGet(this.ctlPort, '/version', 900).then((r) => r.status === 200).catch(() => false);
+      let ctlOk = await httpGet(this.ctlPort, '/version', 700)
+        .then((r) => r.status === 200)
+        .catch(() => false);
+      if (!ctlOk) {
+        // eslint-disable-next-line no-await-in-loop
+        ctlOk = await httpGet(this.ctlPort, '/version', 700, 'localhost')
+          .then((r) => r.status === 200)
+          .catch(() => false);
+      }
       if (ctlOk) {
         // eslint-disable-next-line no-await-in-loop
-        return await tcpAlive(this.port, 900);
+        return (await tcpAlive(this.port, 900)) || (await tcpAlive(this.port, 900, 'localhost'));
+      }
+
+      // 控制器起不来但内核日志显示已监听、mixed 端口也连得上时，降级就绪。
+      // 控制器只用于流量悬浮窗和规则加载确认，缺了它代理本身仍然可用；
+      // 以前这里一律等满 15 秒再报「启动失败」，是本次事故里最误导人的一环。
+      // eslint-disable-next-line no-await-in-loop
+      const mixedOk = await tcpAlive(this.port, 700);
+      if (mixedOk && /listening at/i.test(this.readLog())) {
+        if (!degradedSince) degradedSince = Date.now();
+        if (Date.now() - degradedSince > 1200) {
+          this.degraded = true;
+          this.onLog('控制器未就绪，但代理端口已监听：降级启动（悬浮窗与规则确认可能不可用）');
+          return true;
+        }
       }
       // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, 150));
@@ -420,12 +486,42 @@ class Gateway {
     return false;
   }
 
+  /**
+   * 换节点 / 换模式：保持端口不变（系统代理不用改），重启内核。
+   *
+   * ⑥ 断网机制：重启会先停掉旧内核，这段时间系统代理仍指向这个端口。
+   * 如果新配置启动失败，端口就是死的 —— 整机断网。所以失败时必须用
+   * 原来的节点/模式在同端口把内核拉回来；连回滚都失败时，明确告诉上层
+   * 去还原系统代理（main.js 的 ensureProxySafe 会兜底）。
+   */
+  async restartKeepingPort(target, fallback) {
+    const port = this.port;
+    const tun = this.tunMode;
+    await this.stop({ silent: true });
+    try {
+      return await this.start(target.node, { port, routeMode: target.routeMode, tun });
+    } catch (err) {
+      try {
+        await this.start(fallback.node, { port, routeMode: fallback.routeMode, tun });
+      } catch (rb) {
+        this.rollbackFailed = true;
+        throw new Error(
+          `新配置启动失败（${err.message}），且自动回退原配置也失败（${rb.message}）；系统代理需要复位`
+        );
+      }
+      this.rollbackFailed = false;
+      const e = new Error(`操作失败，已自动回退到原来的配置：${err.message}`);
+      e.rolledBack = true;
+      throw e;
+    }
+  }
+
   /** 换节点：保持端口与路由模式不变（系统代理无需改动），重启内核即可 */
   async switchNode(node) {
     if (!this.running) throw new Error('系统代理未开启');
-    const { port, routeMode } = this;
-    await this.stop({ silent: true });
-    return this.start(node, { port, routeMode });
+    const fallback = { node: this.node, routeMode: this.routeMode };
+    this.rollbackFailed = false;
+    return this.restartKeepingPort({ node, routeMode: this.routeMode }, fallback);
   }
 
   /** 切换路由模式：同样保持端口不变，系统代理设置完全不动 */
@@ -433,10 +529,9 @@ class Gateway {
     if (!this.running) throw new Error('系统代理未开启');
     if (!ROUTE_MODES[routeMode]) throw new Error('未知的路由模式：' + routeMode);
     if (routeMode === this.routeMode) return { port: this.port, routeMode };
-    const port = this.port;
-    const node = this.node;
-    await this.stop({ silent: true });
-    return this.start(node, { port, routeMode });
+    const fallback = { node: this.node, routeMode: this.routeMode };
+    this.rollbackFailed = false;
+    return this.restartKeepingPort({ node: this.node, routeMode }, fallback);
   }
 
   async stop(opts = {}) {
@@ -455,6 +550,7 @@ class Gateway {
         } catch (e) {}
       }
     }
+    removePid(this.pidFile);
     if (!opts.silent) {
       this.node = null;
       this.port = 0;
@@ -490,6 +586,7 @@ class Gateway {
       lastProbe: this.lastProbe || null,
       // 分流规则是否已加载完（global 模式恒为 true）
       rulesReady: this.routeMode === 'global' ? true : this.rulesReady,
+      degraded: !!this.degraded,
       error: this.lastError,
     };
   }
@@ -500,6 +597,8 @@ class Gateway {
    */
   async alive() {
     if (!this.running || !this.proc) return false;
+    // 降级启动时控制器本来就不可用，只看代理端口，别误判成「内核死了」
+    if (this.degraded) return tcpAlive(this.port, 900);
     const ctlOk = await httpGet(this.ctlPort, '/version', 900)
       .then((r) => r.status === 200)
       .catch(() => false);
@@ -522,4 +621,4 @@ class Gateway {
   }
 }
 
-module.exports = { Gateway, DEFAULT_PORT, pickPort, ROUTE_MODES };
+module.exports = { Gateway, DEFAULT_PORT, pickPort, ROUTE_MODES, SELF_CHECK_RULES };

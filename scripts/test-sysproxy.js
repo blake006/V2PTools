@@ -21,6 +21,7 @@ const { execFileSync } = require('child_process');
 const { SystemProxy, DEFAULT_BYPASS, parseRegQuery } = require('../electron/lib/sysproxy');
 
 const TEST_KEY = 'HKCU\\Software\\V2PToolsTest\\Internet Settings';
+const TEST_OWNER_KEY = 'HKCU\\Software\\V2PToolsTest\\ProxyOwner';
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'v2p-sysproxy-'));
 
 let passed = 0;
@@ -50,25 +51,29 @@ function regWorks() {
   }
 }
 
-const REAL = process.platform === 'win32' && regWorks();
+// 安全策略禁止 reg.exe 的环境可用 V2P_TEST_FORCE_MEMORY=1 直接走内存模式
+const REAL = !process.env.V2P_TEST_FORCE_MEMORY && process.platform === 'win32' && regWorks();
 
-const memStore = new Map(); // name -> { type, value }
+const memStore = new Map(); // name -> { type, value }（Internet Settings 键）
+const ownerStore = new Map(); // 归属标记键，独立存储
+const storeFor = (key) => (/ProxyOwner/.test(key) ? ownerStore : memStore);
 
 const ok = () => ({ ok: true, code: 0, stdout: '', stderr: '', error: '' });
 const fail = (msg) => ({ ok: false, code: 1, stdout: '', stderr: msg, error: msg });
 
-/** 模拟 reg.exe / netsh / powershell 的行为 */
+/** 模拟 reg.exe / netsh / powershell 的行为（按键隔离，clearOwner 不会误清系统代理值） */
 function fakeRunner(file, args) {
   if (file !== 'reg') return Promise.resolve(ok());
   const [op, key, ...rest] = args;
+  const store = storeFor(key);
   const flag = (name) => {
     const i = rest.indexOf(name);
     return i === -1 ? null : rest[i + 1];
   };
   if (op === 'query') {
-    if (!memStore.size) return Promise.resolve(fail('系统找不到指定的注册表项或值。'));
+    if (!store.size) return Promise.resolve(fail('系统找不到指定的注册表项或值。'));
     let out = key + '\r\n';
-    for (const [name, item] of memStore) {
+    for (const [name, item] of store) {
       const shown = item.type === 'REG_DWORD' ? '0x' + Number(item.value).toString(16) : item.value;
       out += `    ${name}    ${item.type}    ${shown}\r\n`;
     }
@@ -77,13 +82,13 @@ function fakeRunner(file, args) {
   if (op === 'add') {
     const name = flag('/v');
     if (!name) return Promise.resolve(ok());
-    memStore.set(name, { type: flag('/t') || 'REG_SZ', value: flag('/d') || '' });
+    store.set(name, { type: flag('/t') || 'REG_SZ', value: flag('/d') || '' });
     return Promise.resolve(ok());
   }
   if (op === 'delete') {
     const name = flag('/v');
-    if (name) memStore.delete(name);
-    else memStore.clear();
+    if (name) store.delete(name);
+    else store.clear();
     return Promise.resolve(ok());
   }
   return Promise.resolve(ok());
@@ -115,7 +120,8 @@ function setRaw(name, type, value) {
 function makeProxy() {
   return new SystemProxy({
     dataDir: TMP_DIR,
-    regRoot: REAL ? TEST_KEY : 'HKCU\\Software\\V2PToolsTest\\Internet Settings',
+    regRoot: TEST_KEY,
+    ownerKey: TEST_OWNER_KEY,
     refresh: false,
     runner: REAL ? undefined : fakeRunner,
   });
@@ -252,6 +258,43 @@ function cleanup() {
   const st5 = await sp5.status();
   await check('自定义绕过列表生效', () => assert.strictEqual(st5.bypass, 'localhost;*.corp.example'));
   await sp5.restore();
+
+  /* ---------------- 10. 归属标记：备份文件被删也能自愈 ---------------- */
+  seed([
+    ['ProxyEnable', 'REG_DWORD', 0],
+    ['ProxyServer', 'REG_SZ', ''],
+    ['ProxyOverride', 'REG_SZ', 'localhost;127.*;<local>'],
+  ]);
+  const sp6 = makeProxy();
+  await sp6.apply({ port: 7890 });
+  await check('apply 后写入归属标记', async () => {
+    const owner = await sp6.readOwner();
+    assert.ok(owner && owner.target === '127.0.0.1:7890');
+  });
+  // 模拟用户删掉旧便携版 / 清空 userData：备份文件没了，标记还在注册表里
+  try {
+    fs.unlinkSync(sp6.backupPath);
+  } catch (e) {}
+  const rebooted = makeProxy();
+  const rec3 = await rebooted.recoverIfStale();
+  await check('备份丢失时靠归属标记识别孤儿', () => assert.strictEqual(rec3.recovered, true));
+  await check('标记路径标记为 viaOwner', () => assert.strictEqual(rec3.viaOwner, true));
+  await check('备份丢失时强制恢复直连', async () => {
+    const cur = await rebooted.read();
+    assert.strictEqual(cur.proxyEnable, 0);
+    assert.strictEqual(cur.proxyServer, '');
+  });
+  await check('复位后归属标记被清除', async () => assert.strictEqual(await rebooted.readOwner(), null));
+
+  /* ---------------- 11. 自定义 bypass 里的 <-loopback> 被清掉 ---------------- */
+  const sp7 = makeProxy();
+  await sp7.apply({ port: 7890, bypass: 'localhost;127.*;<-loopback>' });
+  const st7 = await sp7.status();
+  await check('apply 时清洗 <-loopback>', () => {
+    assert.ok(!/<-loopback>/i.test(st7.bypass));
+    assert.ok(st7.bypass.includes('127.*'));
+  });
+  await sp7.restore();
 
   cleanup();
 
