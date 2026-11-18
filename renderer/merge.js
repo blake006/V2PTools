@@ -14,6 +14,27 @@
   }
 
   /**
+   * 该订阅里用户手动改过的分组名。
+   * 「重命名分组 / 移动节点到分组」只改 node.group，没有单独的别名表，
+   * 所以同步时只能从现有节点反推：
+   *   - 优先用订阅对象上记下的 src.groupName（节点全被换掉时也还在）
+   *   - 退化为看现有节点：只认非默认名（默认名就是订阅源 hostname / 文件名），
+   *     且必须唯一，出现多个自定义分组说明用户是按其它维度分的（如按国家），此时不猜
+   */
+  function inheritedGroupOf(state, src) {
+    if (src.groupName) return src.groupName;
+    const def = src.group || '';
+    const seen = new Set();
+    for (const n of state.nodes) {
+      if (n.source !== src.url) continue;
+      const g = n.group || '';
+      if (!g || g === def) continue;
+      seen.add(g);
+    }
+    return seen.size === 1 ? Array.from(seen)[0] : '';
+  }
+
+  /**
    * @param {{nodes: Array, selected: Set}} state 会被就地修改
    * @param {{url: string, group?: string}} src 订阅源
    * @param {Array} incoming 最新拉取到的节点
@@ -24,6 +45,8 @@
     const owned = state.nodes.filter((n) => n.source === src.url);
     const ownedMap = new Map();
     for (const n of owned) ownedMap.set(keyOf(n), n);
+    // 每轮只算一次：节点上千条时，放在循环里就是 O(n²)
+    const inheritedGroup = inheritedGroupOf(state, src);
 
     const incomingKeys = new Set();
     let added = 0;
@@ -38,7 +61,9 @@
         old.name = n.name || old.name;
         old.conf = n.conf;
         old.raw = n.raw;
-        old.group = n.group || old.group;
+        // 分组名是用户可编辑的元数据，订阅里的默认名不能覆盖它，
+        // 否则每次「更新代理」都会把重命名打回 hostname（用户报的 bug）。
+        if (!old.group) old.group = n.group || src.group || '';
         updated += 1;
         continue;
       }
@@ -46,7 +71,8 @@
       if (state.nodes.some((x) => keyOf(x) === k)) continue;
       if (!n.name) n.name = `${n.server}:${n.port}`;
       n.source = src.url;
-      n.group = n.group || src.group || '';
+      // 用户改过名时新节点跟着进同一个分组，否则同源会裂出「自定义名 + 默认名」两组
+      n.group = inheritedGroup || n.group || src.group || '';
       state.nodes.push(n);
       added += 1;
     }
@@ -66,5 +92,5 @@
     return { added, updated, removed };
   }
 
-  return { keyOf, mergeFromSource };
+  return { keyOf, mergeFromSource, inheritedGroupOf };
 });

@@ -132,4 +132,48 @@ t('新节点无名称时自动命名', () => {
   assert.strictEqual(state.nodes[0].name, '9.9.9.9:1080');
 });
 
+/* ---- 分组重命名必须在同步后保留（用户反馈的回归点） ---- */
+
+t('重命名过的分组，同步后不会被默认名还原', () => {
+  const renamed = node({ id: 'n1', server: '1.1.1.1', port: 443, source: SRC.url, group: '日本-家宽' });
+  const state = makeState([renamed]);
+  mergeFromSource(state, SRC, [node({ id: 'f1', server: '1.1.1.1', port: 443, group: SRC.group })], true);
+  assert.strictEqual(state.nodes[0].group, '日本-家宽', '同步不能覆盖用户改过的分组名');
+});
+
+t('重命名后同步新增的节点沿用同一个分组', () => {
+  const renamed = node({ id: 'n1', server: '1.1.1.1', port: 443, source: SRC.url, group: '日本-家宽' });
+  const state = makeState([renamed]);
+  mergeFromSource(
+    state,
+    SRC,
+    [node({ id: 'f1', server: '1.1.1.1', port: 443 }), node({ id: 'f2', server: '2.2.2.2', port: 443 })],
+    true
+  );
+  const added = state.nodes.find((n) => n.server === '2.2.2.2');
+  assert.strictEqual(added.group, '日本-家宽', '新节点应跟进入自定义分组，不能裂出第二组');
+});
+
+t('同一订阅存在多个自定义分组时不猜，按默认名入组', () => {
+  const a = node({ id: 'n1', server: '1.1.1.1', port: 443, source: SRC.url, group: 'A组' });
+  const b = node({ id: 'n2', server: '2.2.2.2', port: 443, source: SRC.url, group: 'B组' });
+  const state = makeState([a, b]);
+  mergeFromSource(state, SRC, [node({ id: 'f3', server: '3.3.3.3', port: 443 })], true);
+  assert.strictEqual(state.nodes.find((n) => n.server === '3.3.3.3').group, 'a.example.com');
+});
+
+t('没改过名（分组为空）时仍会补上默认分组', () => {
+  const plain = node({ id: 'n1', server: '1.1.1.1', port: 443, source: SRC.url, group: '' });
+  const state = makeState([plain]);
+  mergeFromSource(state, SRC, [node({ id: 'f1', server: '1.1.1.1', port: 443, group: SRC.group })], true);
+  assert.strictEqual(state.nodes[0].group, 'a.example.com');
+});
+
+t('订阅把节点整批换掉（服务器全变）时，靠 src.groupName 仍保住重命名', () => {
+  const state = makeState([]);
+  const src = Object.assign({}, SRC, { groupName: '日本-家宽' });
+  mergeFromSource(state, src, [node({ id: 'f1', server: '8.8.8.8', port: 443, group: SRC.group })], true);
+  assert.strictEqual(state.nodes[0].group, '日本-家宽');
+});
+
 console.log(`\n通过 ${pass} 项`);

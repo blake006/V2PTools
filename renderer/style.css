@@ -205,7 +205,7 @@ svg { width: 16px; height: 16px; flex: none; }
 .table-scroll::-webkit-scrollbar-thumb:hover { background: #3a4457; }
 .table-scroll::-webkit-scrollbar-track { background: transparent; }
 
-table.grid { width: 100%; min-width: 1280px; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+table.grid { width: 100%; min-width: 1360px; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 .grid thead th {
   position: sticky; top: 0; z-index: 5;
   background: var(--bg-elev-2);
@@ -250,6 +250,18 @@ table.grid { width: 100%; min-width: 1280px; border-collapse: separate; border-s
 .col-status { width: 26px; }
 .col-name { width: 180px; }
 .col-server { width: 160px; }
+.col-group { width: 130px; }
+/* 分组标签：超长组名（订阅源的 hostname）截断显示，完整名字看 title */
+.group-tag {
+  display: inline-block; max-width: 100%;
+  padding: 1px 7px; border-radius: 6px;
+  font-size: 11px; line-height: 1.5;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  vertical-align: middle;
+}
 .col-num { width: 78px; text-align: right !important; }
 .col-ip { width: 120px; }
 .col-loc { width: 120px; }

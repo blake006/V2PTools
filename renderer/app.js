@@ -381,15 +381,16 @@ function rowHtml(n) {
       </div>
     </td>
     <td data-col="c3" class="col-server mono dim" title="${esc(n.server)}">${esc(n.server)}:${n.port}</td>
-    <td data-col="c4" class="col-num" data-cell="latency">${fmtLatency(n.latency)}</td>
-    <td data-col="c5" class="col-num dim" data-cell="jitter">${n.jitter != null ? n.jitter + ' ms' : '—'}</td>
-    <td data-col="c6" class="col-num" data-cell="speed">${fmtSpeed(n.speed)}</td>
-    <td data-col="c7" class="col-ip mono" data-cell="ip">${n.ip ? esc(n.ip) : '<span class="dim">—</span>'}</td>
-    <td data-col="c8" class="col-loc" data-cell="loc">${locHtml(n)}</td>
-    <td data-col="c9" class="col-isp dim" data-cell="isp" title="${esc(n.isp || '')}">${esc(n.isp || '—')}</td>
-    <td data-col="c10" class="col-iptype" data-cell="iptype">${ipTypeCell(n)}</td>
-    <td data-col="c11" class="col-health" data-cell="health">${healthHtml(n)}</td>
-    <td data-col="c12" class="col-act">
+    <td data-col="c4" class="col-group" data-cell="group">${groupHtml(n)}</td>
+    <td data-col="c5" class="col-num" data-cell="latency">${fmtLatency(n.latency)}</td>
+    <td data-col="c6" class="col-num dim" data-cell="jitter">${n.jitter != null ? n.jitter + ' ms' : '—'}</td>
+    <td data-col="c7" class="col-num" data-cell="speed">${fmtSpeed(n.speed)}</td>
+    <td data-col="c8" class="col-ip mono" data-cell="ip">${n.ip ? esc(n.ip) : '<span class="dim">—</span>'}</td>
+    <td data-col="c9" class="col-loc" data-cell="loc">${locHtml(n)}</td>
+    <td data-col="c10" class="col-isp dim" data-cell="isp" title="${esc(n.isp || '')}">${esc(n.isp || '—')}</td>
+    <td data-col="c11" class="col-iptype" data-cell="iptype">${ipTypeCell(n)}</td>
+    <td data-col="c12" class="col-health" data-cell="health">${healthHtml(n)}</td>
+    <td data-col="c13" class="col-act">
       <div class="row-act">
         <button class="icon-mini ${inUse ? 'on' : ''}" data-act="use" data-id="${n.id}" title="${inUse ? '系统代理正在使用该节点' : '设为系统代理'}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v9" stroke-linecap="round"/><path d="M6.4 6.4a8 8 0 1 0 11.2 0" stroke-linecap="round"/></svg>
@@ -405,6 +406,12 @@ function rowHtml(n) {
         </button>
       </div>
     </td>`;
+}
+
+/** 分组单元格：重命名后的自定义组名，未分组显示破折号 */
+function groupHtml(n) {
+  if (!n.group) return '<span class="dim">—</span>';
+  return `<span class="group-tag" title="${esc(n.group)}">${esc(n.group)}</span>`;
 }
 
 function locHtml(n) {
@@ -759,6 +766,37 @@ function askText(title, value = '', placeholder = '') {
 
 /* ---- 分组操作 ---- */
 
+/**
+ * 把「该订阅当前只有一个自定义分组名」记到订阅对象上（src.groupName）。
+ * 必要性：分组名只存在 node.group 上，订阅若把节点整批换掉（服务器全变），
+ * 同步时就从现有节点反推不出旧名字，重命名会丢。记在订阅源上就不依赖节点。
+ * 出现多个自定义分组（例如按国家自动分组）或没有自定义名时不记。
+ */
+function rememberGroupNames() {
+  if (!state.sources || !state.sources.length) return;
+  let changed = false;
+  for (const src of state.sources) {
+    const def = src.group || '';
+    const names = new Set();
+    for (const n of state.nodes) {
+      if (n.source !== src.url) continue;
+      const g = n.group || '';
+      if (g && g !== def) names.add(g);
+    }
+    const next = names.size === 1 ? Array.from(names)[0] : '';
+    if (next) {
+      if (src.groupName !== next) {
+        src.groupName = next;
+        changed = true;
+      }
+    } else if (src.groupName) {
+      delete src.groupName;
+      changed = true;
+    }
+  }
+  if (changed) saveSources();
+}
+
 async function renameGroup(oldName) {
   const name = await askText('重命名分组', oldName, '输入新的分组名');
   if (name == null) return;
@@ -771,8 +809,9 @@ async function renameGroup(oldName) {
     }
   }
   if (state.filters.group === oldName) state.filters.group = name;
+  rememberGroupNames();
   saveNodes();
-  applyFilters();
+  renderTable();
   toast(`已将 ${n} 个节点重命名到「${name}」`, 'ok');
 }
 
@@ -784,8 +823,9 @@ function deleteGroup(name) {
     if ((node.group || '') === name) node.group = '';
   }
   if (state.filters.group === name) state.filters.group = 'all';
+  rememberGroupNames();
   saveNodes();
-  applyFilters();
+  renderTable();
   toast('分组已删除，节点已归入未分组', 'ok');
 }
 
@@ -798,8 +838,9 @@ function moveSelectedToGroup(name) {
       n += 1;
     }
   }
+  rememberGroupNames();
   saveNodes();
-  applyFilters();
+  renderTable();
   toast(`已将 ${n} 个节点移入「${name || '未分组'}」`, 'ok');
 }
 
@@ -809,27 +850,6 @@ async function newGroupFromSelection() {
   if (name == null) return;
   if (!name) return toast('分组名不能为空', 'err');
   moveSelectedToGroup(name);
-}
-
-function autoGroupBy(kind) {
-  if (!state.nodes.length) return toast('没有节点', 'err');
-  for (const node of state.nodes) {
-    if (kind === 'country') node.group = node.country || '未知地区';
-    else node.group = TYPE_LABEL[node.type] || node.type;
-  }
-  saveNodes();
-  applyFilters();
-  toast(kind === 'country' ? '已按地区重新分组' : '已按协议重新分组', 'ok');
-}
-
-function clearGroups() {
-  if (!state.nodes.some((n) => n.group)) return toast('当前没有分组', 'err');
-  if (!confirm('清除全部分组？节点会归入「未分组」，不会被删除。')) return;
-  for (const node of state.nodes) node.group = '';
-  state.filters.group = 'all';
-  saveNodes();
-  applyFilters();
-  toast('已清除全部分组', 'ok');
 }
 
 function exportGroup(name) {
@@ -875,9 +895,21 @@ function autoGroupBy(kind) {
     if (n.group !== g) changed += 1;
     n.group = g;
   });
+  rememberGroupNames();
   saveNodes();
-  renderAll();
+  renderTable();
   toast(`已按${kind === 'country' ? '地区' : '协议'}重新分组（${changed} 个节点变更）`, 'ok');
+}
+
+function clearGroups() {
+  if (!state.nodes.some((n) => n.group)) return toast('当前没有分组', 'err');
+  if (!confirm('清除全部分组？节点会归入「未分组」，不会被删除。')) return;
+  for (const node of state.nodes) node.group = '';
+  state.filters.group = 'all';
+  rememberGroupNames();
+  saveNodes();
+  renderTable();
+  toast('已清除全部分组', 'ok');
 }
 
 /* ---- 高级筛选面板 ---- */
@@ -2553,8 +2585,8 @@ $('#btnRestore').addEventListener('click', async () => {
 
 $('#btnResetColumns').addEventListener('click', () => {
   try {
-    localStorage.removeItem('v2p.colwidths');
-    localStorage.removeItem('v2p.colorder');
+    localStorage.removeItem('v2p.colwidths.v2');
+    localStorage.removeItem('v2p.colorder.v2');
   } catch (e) {
     /* 忽略 */
   }
@@ -2572,8 +2604,8 @@ $('#btnFactoryReset').addEventListener('click', async () => {
   const r = await window.api.resetAll();
   if (r && r.ok) {
     try {
-      localStorage.removeItem('v2p.colwidths');
-      localStorage.removeItem('v2p.colorder');
+      localStorage.removeItem('v2p.colwidths.v2');
+      localStorage.removeItem('v2p.colorder.v2');
     } catch (e) {
       /* 忽略 */
     }
@@ -2989,12 +3021,12 @@ function autoFitColumn(th) {
   if (key) {
     let map = {};
     try {
-      map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+      map = JSON.parse(localStorage.getItem('v2p.colwidths.v2') || '{}');
     } catch (e) {
       map = {};
     }
     map[key] = width;
-    localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+    localStorage.setItem('v2p.colwidths.v2', JSON.stringify(map));
   }
   clampTableWidth();
 }
@@ -3062,10 +3094,10 @@ async function removeInvalidNodes() {
 /** 恢复某一列的默认宽度 */
 function resetColumnWidth(th) {
   th.style.width = '';
-  const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+  const map = JSON.parse(localStorage.getItem('v2p.colwidths.v2') || '{}');
   const k = colKey(th);
   if (k) delete map[k];
-  localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+  localStorage.setItem('v2p.colwidths.v2', JSON.stringify(map));
 }
 
 /** 恢复全部列的默认宽度 */
@@ -3073,7 +3105,7 @@ function resetAllColumnWidths() {
   document.querySelectorAll('table.grid thead th').forEach((th) => {
     th.style.width = '';
   });
-  localStorage.removeItem('v2p.colwidths');
+  localStorage.removeItem('v2p.colwidths.v2');
   toast('已恢复默认列宽', 'ok', 2000);
 }
 
@@ -3083,7 +3115,7 @@ function enableColumnResize() {
   const ths = [...table.querySelectorAll('thead th')];
   let saved = {};
   try {
-    saved = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+    saved = JSON.parse(localStorage.getItem('v2p.colwidths.v2') || '{}');
   } catch (e) {
     saved = {};
   }
@@ -3091,7 +3123,7 @@ function enableColumnResize() {
   // 会把别的列的宽度套过来，看起来像「少了一列」。直接丢弃重来。
   if (Object.keys(saved).some((k) => /^\d+$/.test(k))) {
     saved = {};
-    localStorage.removeItem('v2p.colwidths');
+    localStorage.removeItem('v2p.colwidths.v2');
   }
 
   ths.forEach((th) => {
@@ -3153,10 +3185,10 @@ function enableColumnResize() {
         th.classList.remove('col-resizing');
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
-        const map = JSON.parse(localStorage.getItem('v2p.colwidths') || '{}');
+        const map = JSON.parse(localStorage.getItem('v2p.colwidths.v2') || '{}');
         const k = colKey(th);
         if (k) map[k] = Math.round(th.getBoundingClientRect().width);
-        localStorage.setItem('v2p.colwidths', JSON.stringify(map));
+        localStorage.setItem('v2p.colwidths.v2', JSON.stringify(map));
         clampTableWidth();
       };
       document.addEventListener('mousemove', onMove);
@@ -3197,14 +3229,14 @@ function saveColumnOrder() {
   const headRow = document.querySelector('table.grid thead tr');
   if (!headRow) return;
   const order = [...headRow.children].map(colKey);
-  localStorage.setItem('v2p.colorder', JSON.stringify(order));
+  localStorage.setItem('v2p.colorder.v2', JSON.stringify(order));
 }
 
 /** 把表头和所有数据行按保存的列顺序重排（渲染后必须调一次，否则新行还是旧顺序） */
 function applyColumnOrder() {
   let order = [];
   try {
-    order = JSON.parse(localStorage.getItem('v2p.colorder') || '[]');
+    order = JSON.parse(localStorage.getItem('v2p.colorder.v2') || '[]');
   } catch (e) {
     order = [];
   }
