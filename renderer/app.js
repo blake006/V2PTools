@@ -418,6 +418,11 @@ function rowHtml(n) {
 /** 分组单元格：重命名后的自定义组名；点一下直接按该分组筛选 */
 function groupHtml(n) {
   if (!n.group) return '<span class="dim">—</span>';
+  // 'all' / 'none' 是筛选器自己的保留值（全部 / 未分组），组名正好撞上时不能做成可点的，
+  // 否则点「all」等于取消筛选、点「none」会筛出未分组，看着像点了没反应。
+  if (n.group === 'all' || n.group === 'none') {
+    return `<span class="group-tag static" title="「${esc(n.group)}」是筛选器的保留值，不能点击筛选">${esc(n.group)}</span>`;
+  }
   return `<span class="group-tag" data-group-filter="${esc(n.group)}" title="点击只看「${esc(n.group)}」">${esc(n.group)}</span>`;
 }
 
@@ -1166,9 +1171,11 @@ function renderSources() {
       const last = src.lastSync ? new Date(src.lastSync).toLocaleString('zh-CN') : '未更新';
       const err = src.error ? `<div class="src-meta" style="color:var(--bad)">${esc(src.error)}</div>` : '';
       // 用户重命名过的分组：卡片上标出来，并给一个「恢复默认名」的入口
+      // 注意默认名用的是 src.group（同步时真正写进节点的那一个），它可能是空串
+      const defName = src.group || '';
       const custom = src.groupName && src.groupName !== name
         ? `<span class="src-tag" title="同步后新节点会沿用这个分组名">分组：${esc(src.groupName)}</span>
-           <button class="icon-mini" data-src-act="resetgroup" data-src-id="${src.id}" title="恢复默认分组名（节点一起改回 ${esc(name)}）">
+           <button class="icon-mini" data-src-act="resetgroup" data-src-id="${src.id}" title="恢复默认分组名（节点一起改回「${esc(defName || '未分组')}」）">
              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v6h6M20 20v-6h-6" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9a8 8 0 0 0-14.4-4.6L4 6M4 15a8 8 0 0 0 14.4 4.6L20 18" stroke-linecap="round" stroke-linejoin="round"/></svg>
            </button>`
         : '';

@@ -42,10 +42,12 @@ const badKeys = sortKeys.filter((k) => !(k in fake));
 check(badKeys.length === 0, `排序键不在节点模型里：${badKeys.join(', ')}`);
 
 // 分组单元格必须带 data-group-filter，否则「点分组→筛选」会静默失效
-// （rowHtml 里是 ${groupHtml(n)}，所以要看 groupHtml 自己的模板）
-const groupFn = js.match(/function groupHtml\(n\)[\s\S]*?return `([\s\S]*?)`;\s*\}/);
+// （rowHtml 里是 ${groupHtml(n)}，所以要看 groupHtml 整个函数体：
+//   它有多个 return 分支，只看第一个模板会误判）
+const groupFn = js.match(/function groupHtml\(n\)[\s\S]*?\n\}/);
 check(!!groupFn, '找不到 groupHtml 函数');
-check(groupFn && /data-group-filter=/.test(groupFn[1]), '分组单元格缺少 data-group-filter 属性');
+check(groupFn && /data-group-filter=/.test(groupFn[0]), '分组单元格缺少 data-group-filter 属性');
+check(groupFn && /'all'|"all"/.test(groupFn[0]) && /'none'|"none"/.test(groupFn[0]), '分组标签没处理 all/none 保留值');
 check(/gchip = e\.target\.closest\('\[data-group-filter\]'\)/.test(js), 'tbody 缺少分组标签的点击处理');
 
 if (failures.length) {

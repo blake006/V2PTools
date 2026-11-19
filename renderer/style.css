@@ -264,6 +264,9 @@ table.grid { width: 100%; min-width: 1360px; border-collapse: separate; border-s
   cursor: pointer;
 }
 .group-tag:hover { color: var(--accent); border-color: rgba(79,140,255,.35); background: var(--accent-soft); }
+/* 组名撞上筛选保留值（all / none）时不可点，保持中性外观 */
+.group-tag.static { cursor: default; }
+.group-tag.static:hover { color: var(--text-dim); border-color: var(--border); background: var(--bg-elev); }
 .col-num { width: 78px; text-align: right !important; }
 .col-ip { width: 120px; }
 .col-loc { width: 120px; }

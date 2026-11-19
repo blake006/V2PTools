@@ -60,6 +60,24 @@ t('收藏节点始终置顶，不受类型排序影响', () => {
   if (out !== 'u>r') throw new Error(`实际顺序 ${out}，期望 u>r`);
 });
 
+// 真实数据里有收藏节点（1 个 hosting 被置顶），当时人工看排序像“乱序”，
+// 实际是正确行为：收藏置顶 + 其余按业务顺序。这条用例把该语义钉住。
+t('收藏置顶后，其余节点仍严格按业务顺序', () => {
+  const nodes = [
+    mk('fav', { ipTypeKey: 'hosting', favorite: true }),
+    mk('p', { ipTypeKey: 'proxy' }),
+    mk('h', { ipTypeKey: 'hosting' }),
+    mk('m', { ipTypeKey: 'mobile' }),
+    mk('r', { ipTypeKey: 'residential' }),
+    mk('u', { ipTypeKey: 'unknown' }),
+  ];
+  const out = sortedNodes({ nodes, sort: { key: 'ipTypeKey', dir: 1 } });
+  if (out[0].id !== 'fav') throw new Error(`收藏节点没有置顶：${ids(out)}`);
+  const order = ['residential', 'mobile', 'hosting', 'proxy', 'unknown'];
+  const rest = out.slice(1).map((n) => order.indexOf(n.ipTypeKey));
+  if (!rest.every((v, i) => i === 0 || rest[i - 1] <= v)) throw new Error(`非收藏部分没按顺序：${ids(out)}`);
+});
+
 t('原有数值列排序没被改坏：延迟升序，未测的排最后', () => {
   const nodes = [mk('n', { latency: null }), mk('a', { latency: 180 }), mk('b', { latency: 60 })];
   const out = ids(sortedNodes({ nodes, sort: { key: 'latency', dir: 1 } }));
