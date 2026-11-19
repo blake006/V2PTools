@@ -351,6 +351,13 @@ function sortedNodes() {
 
     let va = a[key];
     let vb = b[key];
+    // IP 类型按「住宅 > 移动 > 机房 > 代理 > 未知」的业务顺序排，按字母排没有意义
+    if (key === 'ipTypeKey') {
+      const order = ['residential', 'mobile', 'hosting', 'proxy', 'unknown'];
+      const ra = order.indexOf(va) < 0 ? order.length : order.indexOf(va);
+      const rb = order.indexOf(vb) < 0 ? order.length : order.indexOf(vb);
+      return (ra - rb) * dir;
+    }
     if (num.includes(key)) {
       if (va == null) va = Infinity;
       if (vb == null) vb = Infinity;
@@ -408,10 +415,10 @@ function rowHtml(n) {
     </td>`;
 }
 
-/** 分组单元格：重命名后的自定义组名，未分组显示破折号 */
+/** 分组单元格：重命名后的自定义组名；点一下直接按该分组筛选 */
 function groupHtml(n) {
   if (!n.group) return '<span class="dim">—</span>';
-  return `<span class="group-tag" title="${esc(n.group)}">${esc(n.group)}</span>`;
+  return `<span class="group-tag" data-group-filter="${esc(n.group)}" title="点击只看「${esc(n.group)}」">${esc(n.group)}</span>`;
 }
 
 function locHtml(n) {
@@ -794,7 +801,11 @@ function rememberGroupNames() {
       changed = true;
     }
   }
-  if (changed) saveSources();
+  if (changed) {
+    saveSources();
+    // 订阅卡片上会标出「分组：xxx」，改名后要立刻跟着变
+    renderSources();
+  }
 }
 
 async function renameGroup(oldName) {
@@ -1154,9 +1165,16 @@ function renderSources() {
       })();
       const last = src.lastSync ? new Date(src.lastSync).toLocaleString('zh-CN') : '未更新';
       const err = src.error ? `<div class="src-meta" style="color:var(--bad)">${esc(src.error)}</div>` : '';
+      // 用户重命名过的分组：卡片上标出来，并给一个「恢复默认名」的入口
+      const custom = src.groupName && src.groupName !== name
+        ? `<span class="src-tag" title="同步后新节点会沿用这个分组名">分组：${esc(src.groupName)}</span>
+           <button class="icon-mini" data-src-act="resetgroup" data-src-id="${src.id}" title="恢复默认分组名（节点一起改回 ${esc(name)}）">
+             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v6h6M20 20v-6h-6" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9a8 8 0 0 0-14.4-4.6L4 6M4 15a8 8 0 0 0 14.4 4.6L20 18" stroke-linecap="round" stroke-linejoin="round"/></svg>
+           </button>`
+        : '';
       return `<div class="src-item" data-src="${src.id}">
         <div class="src-main">
-          <div class="src-name">${esc(name)}<span class="src-count">${src.count || 0} 个节点</span></div>
+          <div class="src-name">${esc(name)}<span class="src-count">${src.count || 0} 个节点</span>${custom}</div>
           <div class="src-url" title="${esc(src.url)}">${esc(src.url)}</div>
           <div class="src-meta">上次更新：${last}${src.format ? ' · ' + esc(src.format) : ''}</div>
           ${err}
@@ -2535,6 +2553,26 @@ $('#srcList').addEventListener('click', (e) => {
     saveSources();
     renderSources();
     toast('已移除订阅源（节点仍保留在列表中）', 'ok');
+  } else if (act.dataset.srcAct === 'resetgroup') {
+    // 把该订阅的节点和订阅标记一起改回默认名（订阅 hostname / 文件名）
+    const def = src.group || '';
+    const was = src.groupName;
+    if (!was) return;
+    let n = 0;
+    for (const node of state.nodes) {
+      if (node.source === src.url && (node.group || '') === was) {
+        node.group = def;
+        n += 1;
+      }
+    }
+    delete src.groupName;
+    // 当前正在看这个自定义分组时，筛选跟着落到「全部」，否则列表会空着
+    if (state.filters.group === was) state.filters.group = 'all';
+    saveSources();
+    saveNodes();
+    renderTable();
+    renderSources();
+    toast(`已恢复默认分组名${n ? `，${n} 个节点改回「${def || '未分组'}」` : ''}`, 'ok');
   }
 });
 
@@ -2782,6 +2820,12 @@ $('#tbody').addEventListener('click', async (e) => {
     } else if (act.dataset.act === 'use') {
       useNodeAsProxy(id);
     }
+    return;
+  }
+  // 点分组标签直接筛选该分组（别再走打开详情那条路）
+  const gchip = e.target.closest('[data-group-filter]');
+  if (gchip) {
+    setGroupFilter(gchip.dataset.groupFilter);
     return;
   }
   const tr = e.target.closest('tr[data-id]');

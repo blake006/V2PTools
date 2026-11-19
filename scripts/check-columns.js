@@ -37,9 +37,16 @@ const missing = need.filter((c) => !widths.includes(c));
 check(missing.length === 0, `缺少宽度规则：${missing.join(', ')}`);
 
 const sortKeys = [...headBlock[0].matchAll(/data-sort="(\w+)"/g)].map((m) => m[1]);
-const fake = { name: '', type: 'ss', server: '', port: 1, group: '', latency: 1, speed: 1, ip: '', country: '', health: 1 };
+const fake = { name: '', type: 'ss', server: '', port: 1, group: '', latency: 1, speed: 1, ip: '', country: '', health: 1, ipTypeKey: 'unknown' };
 const badKeys = sortKeys.filter((k) => !(k in fake));
 check(badKeys.length === 0, `排序键不在节点模型里：${badKeys.join(', ')}`);
+
+// 分组单元格必须带 data-group-filter，否则「点分组→筛选」会静默失效
+// （rowHtml 里是 ${groupHtml(n)}，所以要看 groupHtml 自己的模板）
+const groupFn = js.match(/function groupHtml\(n\)[\s\S]*?return `([\s\S]*?)`;\s*\}/);
+check(!!groupFn, '找不到 groupHtml 函数');
+check(groupFn && /data-group-filter=/.test(groupFn[1]), '分组单元格缺少 data-group-filter 属性');
+check(/gchip = e\.target\.closest\('\[data-group-filter\]'\)/.test(js), 'tbody 缺少分组标签的点击处理');
 
 if (failures.length) {
   console.log('\n✘ 发现不一致：');
@@ -47,3 +54,4 @@ if (failures.length) {
   process.exit(1);
 }
 console.log('\n✔ 列结构一致（表头 / 单元格 / 宽度 / 排序键）');
+
