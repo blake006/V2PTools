@@ -34,7 +34,8 @@
     "release": "node scripts/make-release.js",
     "preflight": "node scripts/preflight.js",
     "verify-package": "node scripts/verify-package.js",
-    "test-boot-guard": "node scripts/test-boot-guard.js"
+    "test-boot-guard": "node scripts/test-boot-guard.js",
+    "test-share-link": "node scripts/test-share-link.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",

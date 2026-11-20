@@ -2919,25 +2919,32 @@ async function showNodeQr(n) {
   const r = await window.api.qrMake(link);
   if (!r || !r.ok) return toast('生成二维码失败：' + ((r && r.error) || '未知原因'), 'err');
 
+  const net = String((n.conf && n.conf.network) || '').toLowerCase();
+  const tip = /xhttp|splithttp/i.test(net)
+    ? '该节点为 xhttp 传输：链接已带 path/mode，需用支持 XHTTP 的客户端（Xray 内核）导入；sing-box 系客户端不支持这种传输。'
+    : '';
+
   const mask = document.createElement('div');
   mask.className = 'modal-mask open';
   mask.style.zIndex = 240;
   mask.innerHTML = `
-    <div class="modal" style="width:380px">
+    <div class="modal" style="width:420px">
       <div class="modal-head"><div class="modal-title">扫码导入 · ${esc(n.name || n.server)}</div></div>
       <div class="modal-body" style="align-items:center;gap:12px">
         <img src="${r.dataUrl}" alt="节点二维码" style="width:280px;height:280px;border-radius:10px;background:#fff;padding:8px" />
-        <div class="qr-link" data-copy-link title="点击复制完整链接">
-          ${esc(link)}
+        <div class="qr-link" data-copy-link title="单击全选，也可以直接点这里复制完整链接">${esc(link)}</div>
+        ${tip ? `<div class="qr-tip">${esc(tip)}</div>` : ''}
+        <div class="qr-actions">
+          <button class="btn" data-copy-link-btn>复制链接</button>
+          <button class="btn btn-primary" data-close-qr>关闭</button>
         </div>
-        <button class="btn btn-primary" data-close-qr style="width:100%">关闭</button>
       </div>
     </div>`;
   mask.addEventListener('click', async (e) => {
-    if (e.target.closest('[data-copy-link]')) {
+    if (e.target.closest('[data-copy-link]') || e.target.closest('[data-copy-link-btn]')) {
       try {
         await window.api.copyText(link);
-        toast('已复制分享链接', 'ok', 2000);
+        toast('已复制完整分享链接', 'ok', 2000);
       } catch (err) {
         toast('复制失败：' + cleanErr(err), 'err');
       }
