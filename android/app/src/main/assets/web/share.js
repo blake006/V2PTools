@@ -12,11 +12,19 @@
   var enc = encodeURIComponent;
 
   function b64(s) {
-    try {
-      return Buffer.from(String(s), 'utf8').toString('base64');
-    } catch (e) {
-      return btoa(unescape(encodeURIComponent(String(s))));
+    var str = String(s);
+    // 浏览器/WebView 的 in-page Buffer 只是极简垫片，不保证支持 base64 编码，
+    // 所以优先用 btoa（UTF-8 转义），最后才退回 Buffer。
+    if (typeof btoa === 'function') {
+      try {
+        return btoa(unescape(encodeURIComponent(str)));
+      } catch (e) { /* 落到 Buffer 分支 */ }
     }
+    try {
+      var out = Buffer.from(str, 'utf8').toString('base64');
+      if (out && out !== str) return out;
+    } catch (e2) { /* 无可用编码器 */ }
+    return '';
   }
 
   /** 拼查询串：跳过空值，布尔转 1/0 */
@@ -115,7 +123,7 @@
     return extra;
   }
 
-  function toShareLink(n) {
+  function toShareLinkRaw(n) {
     if (!n) return '';
     if (n.raw && /^[a-z0-9+.-]+:\/\//i.test(String(n.raw))) return String(n.raw);
 
@@ -225,6 +233,58 @@
       default:
         return '';
     }
+  }
+
+  /**
+   * IPv6 字面量必须放 [] 里：vless://uuid@2606:4700::1:443 这种写法在
+   * new URL() / 各家客户端里都是非法 URI（端口会被当成最后一段地址）。
+   */
+  function fixIPv6(link) {
+    var m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)([\s\S]*)$/i.exec(link);
+    if (!m) return link;
+    var auth = m[2];
+    var hostport;
+    if (auth.indexOf('@') >= 0) {
+      var at = auth.lastIndexOf('@');
+      hostport = auth.slice(at + 1);
+      if (hostport.charAt(0) !== '[' && hostport.split(':').length > 2) {
+        var colon = hostport.lastIndexOf(':');
+        auth = auth.slice(0, at + 1) + '[' + hostport.slice(0, colon) + ']' + hostport.slice(colon);
+      }
+    } else if (auth.charAt(0) !== '[' && auth.split(':').length > 2) {
+      var c2 = auth.lastIndexOf(':');
+      auth = '[' + auth.slice(0, c2) + ']' + auth.slice(c2);
+    }
+    return m[1] + auth + m[3];
+  }
+
+  /**
+   * 收尾：把从订阅里原样保留的 raw 链接也过一遍。
+   * 有些订阅商给的是 vmess://{JSON}（不是标准 Base64），或者是未加 [] 的 IPv6，
+   * 原样复制出去别的客户端就"格式不正确、导入不了"。
+   */
+  function finalizeLink(link) {
+    if (!link) return '';
+    var s = String(link);
+    if (/^vmess:\/\//i.test(s)) {
+      // vmess 的 body 是 Base64(JSON)，里面的 ':' 是 JSON 语法，不是主机端口，
+      // 绝不能走 IPv6 括号修复（会被切成 {"v":"2","ps"]:"..." 这种废串）。
+      var body = s.slice('vmess://'.length);
+      if (body.trim().charAt(0) === '{') {
+        try {
+          var obj = JSON.parse(body);
+          return 'vmess://' + b64(JSON.stringify(obj));
+        } catch (e) {
+          return s;
+        }
+      }
+      return s;
+    }
+    return fixIPv6(s);
+  }
+
+  function toShareLink(n) {
+    return finalizeLink(toShareLinkRaw(n));
   }
 
   /** 给用户看的可读形式（太长时截断） */

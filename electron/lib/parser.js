@@ -55,6 +55,15 @@ function looksBase64(str) {
   return true;
 }
 
+/**
+ * URL.hostname 对 IPv6 是带方括号的（"[2606:4700::1]"），
+ * 而 mihomo/Clash 配置里的 server 必须是裸地址，否则内核连不上。
+ */
+function hostnameOf(u) {
+  const h = (u && u.hostname) || '';
+  return h.charAt(0) === '[' && h.charAt(h.length - 1) === ']' ? h.slice(1, -1) : h;
+}
+
 function safeDecodeURI(v) {
   if (v == null) return '';
   try {
@@ -266,7 +275,7 @@ function parseVless(link) {
   const { body, name } = splitHash(link);
   const u = new URL(body.replace(/^vless:\/\//i, 'http://'));
   const uuid = safeDecodeURI(u.username);
-  const server = u.hostname;
+  const server = hostnameOf(u);
   const port = toInt(u.port, 443);
   if (!uuid || !server) throw new Error('vless 缺少 uuid 或服务器');
   const q = parseQuery(u.search);
@@ -308,7 +317,7 @@ function parseTrojan(link) {
   const { body, name } = splitHash(link);
   const u = new URL(body.replace(/^trojan:\/\//i, 'http://'));
   const password = safeDecodeURI(u.username || u.password || '');
-  const server = u.hostname;
+  const server = hostnameOf(u);
   const port = toInt(u.port, 443);
   if (!password || !server) throw new Error('trojan 缺少密码或服务器');
   const q = parseQuery(u.search);
@@ -458,7 +467,7 @@ function parseSsr(link) {
 function parseHysteria2(link) {
   const { body, name } = splitHash(link);
   const u = new URL(body.replace(/^(hysteria2|hy2):\/\//i, 'http://'));
-  const server = u.hostname;
+  const server = hostnameOf(u);
   const port = toInt(u.port, 443);
   const auth = safeDecodeURI(u.username || '') + (u.password ? ':' + safeDecodeURI(u.password) : '');
   if (!server) throw new Error('hysteria2 缺少服务器');
@@ -478,7 +487,7 @@ function parseHysteria2(link) {
 function parseHysteria(link) {
   const { body, name } = splitHash(link);
   const u = new URL(body.replace(/^hysteria:\/\//i, 'http://'));
-  const server = u.hostname;
+  const server = hostnameOf(u);
   const port = toInt(u.port, 443);
   if (!server) throw new Error('hysteria 缺少服务器');
   const q = parseQuery(u.search);
@@ -497,7 +506,7 @@ function parseHysteria(link) {
 function parseTuic(link) {
   const { body, name } = splitHash(link);
   const u = new URL(body.replace(/^tuic:\/\//i, 'http://'));
-  const server = u.hostname;
+  const server = hostnameOf(u);
   const port = toInt(u.port, 443);
   if (!server) throw new Error('tuic 缺少服务器');
   const q = parseQuery(u.search);
@@ -519,7 +528,7 @@ function parseTuic(link) {
 function parseAnytls(link) {
   const { body, name } = splitHash(link);
   const u = new URL(body.replace(/^anytls:\/\//i, 'http://'));
-  const server = u.hostname;
+  const server = hostnameOf(u);
   const port = toInt(u.port, 443);
   if (!server) throw new Error('anytls 缺少服务器');
   const q = parseQuery(u.search);
@@ -536,7 +545,7 @@ function parseAnytls(link) {
 function parseSocks(link, type) {
   const { body, name } = splitHash(link);
   const u = new URL(body.replace(/^socks(4|5|5h)?:\/\//i, 'http://'));
-  const server = u.hostname;
+  const server = hostnameOf(u);
   const port = toInt(u.port, 1080);
   if (!server) throw new Error('socks 缺少服务器');
   const conf = { udp: true };
@@ -551,7 +560,7 @@ function parseHttpProxy(link) {
   const { body, name } = splitHash(link);
   const isTls = /^https:\/\//i.test(body);
   const u = new URL(body);
-  const server = u.hostname;
+  const server = hostnameOf(u);
   const port = toInt(u.port, isTls ? 443 : 8080);
   if (!server) throw new Error('http 代理缺少服务器');
   const conf = {};

@@ -75,6 +75,15 @@
         .map(function (b) { return (b < 16 ? '0' : '') + b.toString(16); })
         .join('');
     }
+    if (/^base64$/i.test(enc)) {
+      // 分享链接（vmess Body、ss 用户信息）靠这个编码；缺了它会把明文 JSON 直接拼进链接
+      var bin = this.bytes.map(function (b) { return String.fromCharCode(b); }).join('');
+      return window.btoa(bin);
+    }
+    if (/^base64url$/i.test(enc)) {
+      var bin2 = this.bytes.map(function (b) { return String.fromCharCode(b); }).join('');
+      return window.btoa(bin2).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
     return utf8Decode(this.bytes);
   };
 

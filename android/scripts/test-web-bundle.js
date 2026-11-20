@@ -189,6 +189,63 @@ if (parsed && W.IPHMerge) {
   }
 }
 
+/* ---------- 分享链接：WebView 没有真 Buffer，必须仍是标准格式 ---------- */
+// 现场表现：复制出来的 vmess 变成 vmess://{JSON}、ss 变成明文 cipher:pass，
+// 贴进 v2rayN / Clash 都导入不了。根因是 loader.js 的 MiniBuffer 不支持 base64 编码。
+const WEB_DIR = path.join(__dirname, '..', 'app', 'src', 'main', 'assets', 'web');
+try {
+  vm.runInContext(fs.readFileSync(path.join(WEB_DIR, 'share.js'), 'utf8'), ctx, { filename: 'share.js' });
+  const SHARE = W.IPHShare;
+  if (SHARE && typeof SHARE.toShareLink === 'function') ok('share.js 就位');
+  else bad('share.js 未挂载');
+
+  const nodesFile = path.join(process.env.APPDATA || '', 'V2PTools', 'nodes.json');
+  const all = fs.existsSync(nodesFile)
+    ? (() => { const r = JSON.parse(fs.readFileSync(nodesFile, 'utf8')); return Array.isArray(r) ? r : (r.nodes || []); })()
+    : [];
+  if (all.length < 100) {
+    bad('缺少真实节点库，无法验证分享链接', nodesFile);
+  } else {
+    let exported = 0, badShape = 0, badUrl = 0;
+    const samples = [];
+    for (const n of all) {
+      const link = SHARE.toShareLink(n);
+      if (!link) continue;
+      exported += 1;
+      if (/^vmess:\/\//.test(link)) {
+        const body = link.slice(8);
+        if (!/^[A-Za-z0-9+/=]+$/.test(body)) { badShape += 1; if (samples.length < 3) samples.push('vmess 非 base64: ' + body.slice(0, 30)); continue; }
+        let obj = null;
+        try { obj = JSON.parse(Buffer.from(body, 'base64').toString('utf8')); } catch (e) { obj = null; }
+        if (!obj || !obj.add) { badShape += 1; if (samples.length < 3) samples.push('vmess 解码失败'); }
+        continue;
+      }
+      if (/^ss:\/\//.test(link)) {
+        const ui = link.slice(5).split('@')[0].split('#')[0];
+        // SIP002 允许 base64url（-_）且可以不补 =，两种都算合规
+        if (!/^[A-Za-z0-9+/_-]+(=*)$/.test(ui)) {
+          badShape += 1;
+          if (samples.length < 3) samples.push('ss 用户信息非 Base64: ' + ui.slice(0, 30));
+          continue;
+        }
+        const dec = Buffer.from(ui.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+        if (!/^[^:]+:.+$/.test(dec)) { badShape += 1; if (samples.length < 3) samples.push('ss 解码异常: ' + dec.slice(0, 30)); }
+        continue;
+      }
+      try {
+        const u = new URL(link);
+        if (!u.hostname) badUrl += 1;
+      } catch (e) { badUrl += 1; if (samples.length < 3) samples.push('URL 解析失败: ' + link.slice(0, 40)); }
+    }
+    if (badShape) bad('vmess/ss 编码不是标准 Base64', badShape + ' 个，例: ' + samples[0]);
+    else ok('vmess/ss 编码为标准 Base64');
+    if (badUrl) bad('存在客户端无法解析的链接', badUrl + ' 个，例: ' + samples[0]);
+    else ok('非 vmess 链接均可被标准 URL 解析', exported + ' 条');
+  }
+} catch (e) {
+  bad('分享链接检查抛错', e.message);
+}
+
 /* ---------- 二维码弹窗 / VPN 启动的静态回归 ---------- */
 // 这两个是「用户拿到手才发现」的问题：链接显示被截断 → 长按复制得到断链；
 // VPN 首启没复制规则 → bypass-cn 失效。放在这里防止再退化。
@@ -212,3 +269,4 @@ else bad('VPN 启动路径缺少 ensureRules');
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);
 if (fail) console.log('失败项: ' + failures.join(' / '));
 process.exit(fail ? 1 : 0);
+
