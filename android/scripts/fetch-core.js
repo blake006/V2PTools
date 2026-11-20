@@ -32,10 +32,14 @@ function get(url, redirects = 0) {
     const req = https.get(
       url,
       {
-        headers: {
-          'User-Agent': 'v2ptools-android-fetch',
-          Accept: 'application/vnd.github+json',
-        },
+        headers: Object.assign(
+          {
+            'User-Agent': 'v2ptools-android-fetch',
+            Accept: 'application/vnd.github+json',
+          },
+          // CI 里无认证调用 GitHub API 会撞共享 IP 的限流（HTTP 403），带上 token 才稳
+          process.env.GITHUB_TOKEN ? { Authorization: 'Bearer ' + process.env.GITHUB_TOKEN } : {}
+        ),
         timeout: 60000,
       },
       (res) => {

@@ -86,6 +86,8 @@ jobs:
         run: node android/scripts/sync-web.js
 
       - name: 下载 mihomo 安卓内核
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd android
           if [ "${{ github.event.inputs.abi }}" = "all" ]; then
