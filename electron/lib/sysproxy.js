@@ -13,7 +13,7 @@
  *   哪怕配置全没了也能认出来并复位（1.5.0 之前正是这里漏了导致开机整机断网）
  */
 
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -23,6 +23,28 @@ const OWNER_KEY = 'HKCU\\Software\\V2PTools\\ProxyOwner';
 
 const BACKUP_NAME = 'sysproxy-backup.json';
 const REFRESH_SCRIPT = 'sysproxy-refresh.ps1';
+// 开机守护：登录时自检一次，只在「代理指向我们自己的端口、但端口已经没人听」时复位。
+// 解决的是进程被强杀 / 关机时来不及还原 / 重启后工具没自启 这三类场景的整机断网。
+const GUARD_SCRIPT = 'boot-guard.ps1';
+const GUARD_LOG = 'boot-guard.log';
+const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+const RUN_VALUE = 'V2PTools-ProxyGuard';
+
+/**
+ * 解析 Windows PowerShell 的绝对路径。
+ * 这台机器上有 powershell.exe 但 PATH 里没有（pwsh 7 环境常见），
+ * 直接用裸名字会导致刷新脚本、登录守护静默失效，所以优先走绝对路径。
+ */
+function powershellExe() {
+  const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows'].filter(Boolean);
+  for (const r of roots) {
+    const p = path.join(r, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch (e) {}
+  }
+  return 'powershell.exe';
+}
 
 const TRACKED = ['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL', 'AutoDetect'];
 
@@ -77,17 +99,29 @@ function sanitizeBypass(raw) {
 /* ------------------------------------------------------------------ */
 
 function run(file, args, timeout = 8000) {
-  return new Promise((resolve) => {
-    execFile(file, args, { timeout, windowsHide: true, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
-      const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
-      resolve({
-        ok: !err,
-        code,
-        stdout: String(stdout || ''),
-        stderr: String(stderr || ''),
-        error: err ? err.message : '',
+  const attempt = (exe) =>
+    new Promise((resolve) => {
+      execFile(exe, args, { timeout, windowsHide: true, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
+        const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
+        resolve({
+          ok: !err,
+          code,
+          stdout: String(stdout || ''),
+          stderr: String(stderr || ''),
+          error: err ? err.message : '',
+        });
       });
     });
+  return attempt(file).then((r) => {
+    // 某些环境（例如继承自 pwsh 的 PATH）里找不到 reg.exe / netsh.exe，
+    // 按绝对路径重试一次，避免「开了代理关不掉」这种致命失败
+    if (!r.ok && /ENOENT|not recognized|不是内部或外部命令/i.test(r.error + r.stderr)) {
+      const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file + '.exe');
+      try {
+        if (fs.existsSync(exe)) return attempt(exe);
+      } catch (e) {}
+    }
+    return r;
   });
 }
 
@@ -108,6 +142,78 @@ function parseRegQuery(stdout) {
     out[name] = { type, value };
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* 开机守护脚本（登录时兜底复位，独立于主程序是否在运行）              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 生成 guard 脚本内容。
+ * 设计原则：只处理「确认是本工具留下的」代理，端口还活着就什么都不做。
+ *  - 主程序 / 内核进程在跑 → 直接退出
+ *  - 当前 ProxyServer 不等于我们的 target → 不动（用户自己或别的软件设的）
+ *  - target 端口仍在监听 → 不动
+ *  - 其余情况按备份快照还原；没有快照就只关开关、清掉指向死端口的地址
+ */
+function guardScriptText(dir) {
+  // 8.3 短路径（C:\Users\JACKHU~1\...）会让 PowerShell 的 Remove-Item / Test-Path
+  // 解析失败（Add-Content 却能写），所以脚本里必须用展开后的长路径
+  let base = dir;
+  try {
+    base = fs.realpathSync.native(dir);
+  } catch (e) {}
+  const L = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$base = '${base.replace(/'/g, "''")}'`,
+    `$log = Join-Path $base '${GUARD_LOG}'`,
+    "function Write-GuardLog($m) { try { Add-Content -Path $log -Value ((Get-Date).ToString('o') + ' ' + $m) -Encoding utf8 } catch {} }",
+    // 给「开机自启的代理软件」留出启动时间，避免和它抢设置
+    'Start-Sleep -Seconds 4',
+    "if (Get-Process -Name 'V2PTools','mihomo' -ErrorAction SilentlyContinue) { exit }",
+    "$ownerKey = 'HKCU:\\Software\\V2PTools\\ProxyOwner'",
+    "$ie = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'",
+    "$backupPath = Join-Path $base 'sysproxy-backup.json'",
+    // Set-ItemProperty 没有 -Type 参数，写 DWORD 必须用 New-ItemProperty
+    'function Set-Dword($path, $name, $val) { New-ItemProperty -Path $path -Name $name -Value ([int]$val) -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null }',
+    'function Set-Str($path, $name, $val) { New-ItemProperty -Path $path -Name $name -Value ([string]$val) -PropertyType String -Force -ErrorAction SilentlyContinue | Out-Null }',
+    '$target = (Get-ItemProperty -Path $ownerKey).Target',
+    'if (-not $target -and (Test-Path $backupPath)) {',
+    '  try { $target = (Get-Content $backupPath -Raw -Encoding utf8 | ConvertFrom-Json).target } catch {}',
+    '}',
+    'if (-not $target) { exit }',
+    '$cur = Get-ItemProperty -Path $ie',
+    'if ([int]$cur.ProxyEnable -ne 1 -or $cur.ProxyServer -ne $target) { exit }',
+    "$port = [int](($target -split ':')[-1])",
+    '$alive = $false',
+    "try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $port); $alive = $true; $c.Close() } catch {}",
+    'if ($alive) { exit }',
+    '$bk = $null',
+    'if (Test-Path $backupPath) {',
+    '  try { $bk = Get-Content $backupPath -Raw -Encoding utf8 | ConvertFrom-Json } catch {}',
+    '}',
+    'if ($bk -and $bk.values) {',
+    '  $v = $bk.values',
+    '  Set-Dword $ie ProxyEnable $v.proxyEnable',
+    '  if ($v.proxyServer) { Set-Str $ie ProxyServer $v.proxyServer } else { Remove-ItemProperty -Path $ie -Name ProxyServer }',
+    '  if ($v.proxyOverride) { Set-Str $ie ProxyOverride $v.proxyOverride } else { Remove-ItemProperty -Path $ie -Name ProxyOverride }',
+    '  if ($v.autoConfigUrl) { Set-Str $ie AutoConfigURL $v.autoConfigUrl } else { Remove-ItemProperty -Path $ie -Name AutoConfigURL }',
+    '  Set-Dword $ie AutoDetect $v.autoDetect',
+    '  Write-GuardLog "restored from backup: $target"',
+    '} else {',
+    '  Set-Dword $ie ProxyEnable 0',
+    "  if ($cur.ProxyServer -eq $target) { Remove-ItemProperty -Path $ie -Name ProxyServer }",
+    '  Write-GuardLog "forced direct (no backup): $target"',
+    '}',
+    'Remove-Item -Path $ownerKey -Recurse -Force',
+    'Remove-Item -Path $backupPath -Force',
+    '$refresh = Join-Path $base "sysproxy-refresh.ps1"',
+    "$ps = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'",
+    "if (-not (Test-Path $ps)) { $ps = 'powershell.exe' }",
+    'if (Test-Path $refresh) { & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $refresh }',
+    '',
+  ];
+  return L.join('\r\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -310,7 +416,7 @@ class SystemProxy {
       fs.writeFileSync(scriptPath, script, 'utf8');
     }
     const r = await this.run(
-      'powershell.exe',
+      powershellExe(),
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
       20000
     );
@@ -333,6 +439,9 @@ class SystemProxy {
     // 它会让 127.0.0.1 也走代理，连本工具自己的控制器和其它代理工具的本地 API 都连不上
     const bypass = sanitizeBypass(opts.bypass || DEFAULT_BYPASS);
     const server = `${host}:${port}`;
+
+    // 每次开启顺带补装登录守护：用户可能清过启动项 / 换过便携版目录
+    this.installBootGuard().catch(() => {});
 
     // 先写归属标记，再动 ProxyEnable。中途被强杀也能靠它认出孤儿设置。
     await this.markOwner(server, { winhttp: !!opts.winhttp });
@@ -463,6 +572,79 @@ class SystemProxy {
   }
 
   /**
+   * 同步关掉代理开关（阻塞式，毫秒级）。
+   *
+   * 只做一件事：ProxyEnable = 0。不删地址、不动备份，后续 restore() 仍会完整还原。
+   * 存在的意义：退出 / 关机时 Electron 的异步还原链（多个 reg 调用 + powershell 刷新）
+   * 可能被系统直接掐断，先同步把开关关掉，最坏情况也只是「直连 + 残留地址」，不会整机断网。
+   */
+  disableSync() {
+    if (!this.supported) return false;
+    const args = ['add', this.regRoot, '/v', 'ProxyEnable', '/t', 'REG_DWORD', '/d', '0', '/f'];
+    const candidates = ['reg', path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe')];
+    for (const exe of candidates) {
+      try {
+        execFileSync(exe, args, { windowsHide: true, timeout: 3000, stdio: 'ignore' });
+        return true;
+      } catch (e) {
+        this.lastError = '同步关闭系统代理失败：' + e.message;
+      }
+    }
+    return false;
+  }
+
+  get guardScriptPath() {
+    return path.join(this.dataDir, GUARD_SCRIPT);
+  }
+
+  /**
+   * 安装开机守护（幂等）。
+   *
+   * 登录时跑一次 boot-guard.ps1：如果发现系统代理还指着我们自己的端口、而该端口已经没人监听，
+   * 就自动复位。覆盖三种正常退出逻辑管不到的情况：
+   *   1) 关机时异步还原被系统中断
+   *   2) 任务管理器强杀 / 崩溃，进程没机会清理
+   *   3) 重启后工具本身没有开机自启 → 用户一开浏览器就连不上任何网站
+   *
+   * 用 HKCU Run 键而不是计划任务：不需要管理员权限，也不会在别人机器上留下服务。
+   */
+  async installBootGuard(opts = {}) {
+    if (!this.supported || opts.disabled) return { ok: false, skipped: true };
+    // 单测会注入临时注册表键，此时绝不能碰真实的 Run 键
+    if (this.regRoot !== REAL_REG_ROOT) return { ok: false, skipped: true };
+    try {
+      this.ensureDir();
+      // PowerShell 单引号字符串里反斜杠是普通字符，只需转义单引号
+      const actual = guardScriptText(this.dataDir);
+      let needWrite = true;
+      try {
+        needWrite = fs.readFileSync(this.guardScriptPath, 'utf8') !== actual;
+      } catch (e) {}
+      if (needWrite) fs.writeFileSync(this.guardScriptPath, actual, 'utf8');
+
+      const cmd = `"${powershellExe()}" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${this.guardScriptPath}"`;
+      const r = await this.run('reg', ['add', RUN_KEY, '/v', RUN_VALUE, '/t', 'REG_SZ', '/d', cmd, '/f'], 8000);
+      if (!r.ok) throw new Error((r.stderr || r.error || '写入 Run 键失败').trim());
+      this.guardInstalled = true;
+      return { ok: true, script: this.guardScriptPath };
+    } catch (err) {
+      this.lastError = '安装开机守护失败：' + err.message;
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /** 卸载开机守护（便携版被移走后不留无效的登录项） */
+  async uninstallBootGuard() {
+    if (!this.supported) return { ok: false };
+    if (this.regRoot !== REAL_REG_ROOT) return { ok: false, skipped: true };
+    const r = await this.run('reg', ['delete', RUN_KEY, '/v', RUN_VALUE, '/f'], 8000);
+    try {
+      fs.unlinkSync(this.guardScriptPath);
+    } catch (e) {}
+    return { ok: r.ok };
+  }
+
+  /**
    * 启动时检查是否有上次异常退出遗留的代理设置。
    *
    * 归属标记优先级高于备份文件：备份会随 userData 一起被删掉（用户删了旧便携版就发生过），
@@ -514,4 +696,14 @@ class SystemProxy {
   }
 }
 
-module.exports = { SystemProxy, DEFAULT_BYPASS, REAL_REG_ROOT, OWNER_KEY, TRACKED, sanitizeBypass, parseRegQuery };
+module.exports = {
+  SystemProxy,
+  DEFAULT_BYPASS,
+  REAL_REG_ROOT,
+  OWNER_KEY,
+  TRACKED,
+  sanitizeBypass,
+  parseRegQuery,
+  guardScriptText,
+  powershellExe,
+};

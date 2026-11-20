@@ -33,7 +33,8 @@
     "fetch-rules": "node scripts/fetch-rules.js",
     "release": "node scripts/make-release.js",
     "preflight": "node scripts/preflight.js",
-    "verify-package": "node scripts/verify-package.js"
+    "verify-package": "node scripts/verify-package.js",
+    "test-boot-guard": "node scripts/test-boot-guard.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",

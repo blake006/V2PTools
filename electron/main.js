@@ -902,6 +902,14 @@ app.whenReady().then(async () => {
 
   bootLog('Store/CoreManager 就绪');
   sysproxy = new SystemProxy({ dataDir: path.join(userData, 'sysproxy') });
+  // 登录兜底守护（幂等）：进程被强杀 / 关机来不及还原 / 重启后本工具没自启时，
+  // 由它在下一次登录时把「指向死端口的系统代理」复位，避免整机连国内 IP 都打不开。
+  sysproxy
+    .installBootGuard()
+    .then((r) => {
+      if (!r.ok && !r.skipped) bootLog('安装开机守护失败: ' + (r.error || ''));
+    })
+    .catch(() => {});
 
   gateway = new Gateway({
     corePath: resolveCorePath(),
@@ -1014,6 +1022,11 @@ app.on('before-quit', async (e) => {
       Promise.race([Promise.resolve(p).catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
 
     if (sysproxy) {
+      // ① 同步先关开关（毫秒级）：哪怕后面异步还原被系统掐断，
+      // 也只会剩下「直连 + 一个没人用的地址」，不会整机断网。
+      try {
+        sysproxy.disableSync();
+      } catch (e) {}
       let restored = false;
       try {
         await withTimeout(sysproxy.restore(), 4000);
