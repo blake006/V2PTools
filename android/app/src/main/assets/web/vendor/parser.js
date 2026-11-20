@@ -154,6 +154,21 @@ function applyTransport(conf, o) {
       };
       break;
     }
+    case 'xhttp':
+    case 'splithttp': {
+      conf.network = 'xhttp';
+      const opts = { path: path || '/', mode: o.mode || 'auto' };
+      if (host) opts.host = host;
+      if (o.extra) {
+        try {
+          opts.extra = JSON.parse(o.extra);
+        } catch (e) {
+          opts.extra = o.extra;
+        }
+      }
+      conf['xhttp-opts'] = opts;
+      break;
+    }
     case 'quic': {
       conf.network = 'quic';
       break;
@@ -273,6 +288,8 @@ function parseVless(link) {
     alpn: q.alpn,
     flow: q.flow,
     serviceName: q.servicename || q.serviceName,
+    mode: q.mode,
+    extra: q.extra,
     allowInsecure: truthy(q.allowinsecure) || truthy(q.insecure),
     realityPublicKey: q.pbk,
     realityShortId: q.sid,
@@ -310,6 +327,8 @@ function parseTrojan(link) {
     fp: q.fp,
     alpn: q.alpn,
     serviceName: q.servicename,
+    mode: q.mode,
+    extra: q.extra,
     allowInsecure: truthy(q.allowinsecure) || truthy(q.insecure),
   });
   if (conf.servername) conf.sni = conf.servername;

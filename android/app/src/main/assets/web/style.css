@@ -412,6 +412,7 @@ body.light .sheet-mask { background: rgba(20, 30, 50, .38); }
 .qr-box svg { width: 100%; height: 100%; display: block; }
 .qr-link {
   font-size: 11px; line-height: 1.5; color: var(--dim); word-break: break-all;
-  text-align: center; max-height: 52px; overflow: hidden;
+  text-align: center; max-height: 120px; overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   -webkit-user-select: text; user-select: text;
 }

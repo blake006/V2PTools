@@ -18,6 +18,7 @@
     maxLatency: null,
     minSpeed: null,
     dnsblOnly: false,
+    dnsblClean: false,
   };
 
   function normalize(f) {
@@ -31,10 +32,12 @@
 
   /** IP 类型归类（住宅 / 机房 / 代理 / 移动 / 未知） */
   function ipTypeKey(n) {
+    // 优先用检测器给出的结论：ASN 名单 + PTR 反查比「有 IP 就算住宅」靠谱得多
+    if (n.ipTypeKey) return n.ipTypeKey;
     if (n.mobileFlag) return 'mobile';
     if (n.hostingFlag) return 'hosting';
     if (n.proxyFlag) return 'proxy';
-    if (n.ip) return 'residential';
+    if (n.ip) return 'unknown';
     return 'unknown';
   }
 
@@ -81,6 +84,7 @@
       if (c.maxLatency != null && (n.latency == null || n.latency > c.maxLatency)) return false;
       if (c.minSpeed != null && (n.speed == null || n.speed < c.minSpeed)) return false;
       if (c.dnsblOnly && !(n.dnsbl && n.dnsbl.length)) return false;
+      if (c.dnsblClean && !(n.dnsbl && n.dnsbl.length === 0)) return false;
     }
 
     if (skip !== 'query' && !textMatch(n, query)) return false;
@@ -123,7 +127,7 @@
     if (c.protocols.length) n += 1;
     if (c.countries.length) n += 1;
     if (c.ipTypes.length) n += 1;
-    if (c.minHealth != null || c.maxLatency != null || c.minSpeed != null || c.dnsblOnly) n += 1;
+    if (c.minHealth != null || c.maxLatency != null || c.minSpeed != null || c.dnsblOnly || c.dnsblClean) n += 1;
     if (query) n += 1;
     return n;
   }

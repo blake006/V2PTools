@@ -189,6 +189,26 @@ if (parsed && W.IPHMerge) {
   }
 }
 
+/* ---------- 二维码弹窗 / VPN 启动的静态回归 ---------- */
+// 这两个是「用户拿到手才发现」的问题：链接显示被截断 → 长按复制得到断链；
+// VPN 首启没复制规则 → bypass-cn 失效。放在这里防止再退化。
+const WEB = path.join(__dirname, '..', 'app', 'src', 'main', 'assets', 'web');
+const APPJS = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8');
+if (/\.slice\(0,\s*120\)|link\.length\s*>\s*120/.test(APPJS)) {
+  bad('二维码链接仍被截断到 120 字');
+} else {
+  ok('二维码链接不截断');
+}
+if (APPJS.includes('textContent = link;')) ok('qrLink 写入完整链接');
+else bad('qrLink 未写入完整链接');
+
+const PROXY_KT = fs.readFileSync(
+  path.join(__dirname, '..', 'app', 'src', 'main', 'java', 'com', 'v2ptools', 'android', 'ProxyService.kt'),
+  'utf8'
+);
+if (PROXY_KT.includes('MihomoCore.ensureRules')) ok('VPN 启动前复制规则文件');
+else bad('VPN 启动路径缺少 ensureRules');
+
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);
 if (fail) console.log('失败项: ' + failures.join(' / '));
 process.exit(fail ? 1 : 0);

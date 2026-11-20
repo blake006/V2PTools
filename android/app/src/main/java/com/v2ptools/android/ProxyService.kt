@@ -132,6 +132,14 @@ class ProxyService : VpnService() {
     }
 
     private fun doStartVpn(cfg: String, ctl: Int) {
+        // 1) 先停掉独立进程内核：VPN 模式内核跑在应用进程内，占用同样的
+        //    mixed-port / external-controller，不先停会因端口被占而启动失败。
+        MihomoCore.stop()
+        // 2) 规则文件必须先落到 dataDir：configgen 生成的 rule-providers 指向
+        //    ./rules/*.yaml，只有走过「手动代理模式」才会复制。直接开 VPN 时缺文件，
+        //    内核会报 initial rule provider error，默认 bypass-cn 直接失效（全量走代理）。
+        MihomoCore.ensureRules(this)
+
         val builder = Builder()
             .setSession("V2PTools")
             .setMtu(1500)
@@ -180,6 +188,14 @@ class ProxyService : VpnService() {
             err = "未集成 mihomo.aar，无法启用 VPN。请用 Wi-Fi 代理模式，或按 README 编译 AAR。"
         }
 
+        // 3) MihomoAar.start() 只在解析异常时返回错误；配置应用失败（规则文件缺失、
+        //    tun 建不起来等）内核只打日志，界面会误报「VPN 已启动」。用 external-controller
+        //    是否就绪来判定内核真的跑起来了，失败要说清楚而不是假装成功。
+        if (err == null && !waitCtlReady(ctl, 8000)) {
+            if (MihomoAar.available()) MihomoAar.stop() else LibcoreBridge.stopTun()
+            err = "内核未能就绪（配置应用失败），请查看日志或改用「手动代理」模式"
+        }
+
         if (err != null) {
             lastVpnError = err
             try { pfd.close() } catch (e: Exception) {}
@@ -193,6 +209,31 @@ class ProxyService : VpnService() {
         vpnRunning = true
         acquireWake()
         notifyState()
+    }
+
+    /** 轮询 external-controller，确认进程内内核已经把配置应用起来了 */
+    private fun waitCtlReady(port: Int, timeoutMs: Long): Boolean {
+        if (port <= 0) return true
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val c = java.net.URL("http://127.0.0.1:$port/version").openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 800
+                c.readTimeout = 800
+                c.requestMethod = "GET"
+                val code = c.responseCode
+                c.disconnect()
+                if (code == 200) return true
+            } catch (e: Exception) {
+                // 还没起来，继续等
+            }
+            try {
+                Thread.sleep(150)
+            } catch (e: InterruptedException) {
+                return false
+            }
+        }
+        return false
     }
 
     /* ---------------- 生命周期 ---------------- */

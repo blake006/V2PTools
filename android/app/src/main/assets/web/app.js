@@ -1183,7 +1183,10 @@
     }
 
     $('#qrTitle').textContent = n.name || (n.server + ':' + n.port);
-    $('#qrLink').textContent = link.length > 120 ? link.slice(0, 120) + '…' : link;
+    // 展示完整链接（可滚动）：只显示前 120 字时，长按文字复制到的是断链，
+    // 贴进别的客户端就会「导入失败 / 缺参数」。复制按钮始终给完整串。
+    $('#qrLink').textContent = link;
+    $('#qrLink').title = '长按可选择全文；更稳妥的做法是点下面的「复制分享链接」';
     $('#sheetQr').dataset.nodeId = n.id;
     openSheet('sheetQr');
   }
