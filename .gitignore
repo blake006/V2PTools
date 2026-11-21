@@ -9,3 +9,8 @@ vendor/*.zip
 Thumbs.db
 .tmpbuild/
 build.log
+
+# 签名密钥只在 CI Secrets 里，禁止入库
+android/keystore/*.p12
+android/keystore/*.pem
+

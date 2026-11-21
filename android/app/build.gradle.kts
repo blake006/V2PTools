@@ -11,14 +11,34 @@ android {
         applicationId = "com.v2ptools.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "1.1.8"
+        versionCode = 15
+        versionName = "1.1.9"
+    }
+
+    // 固定签名：CI 每次重建的 debug keystore 都不同，会导致「包冲突、无法覆盖安装」。
+    // 密钥由 CI 从 GitHub Secrets 解码到 android/keystore/v2ptools.p12。
+    val stableKeystore = rootProject.file("keystore/v2ptools.p12")
+    signingConfigs {
+        if (stableKeystore.exists()) {
+            create("stable") {
+                storeFile = stableKeystore
+                storeType = "PKCS12"
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "v2ptools"
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                    ?: System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            if (stableKeystore.exists()) signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (stableKeystore.exists()) signingConfig = signingConfigs.getByName("stable")
         }
     }
 
