@@ -32,9 +32,9 @@ class Store {
 }
 
 const DEFAULT_SETTINGS = {
-  concurrency: 8,
-  latencyTimeout: 8000,
-  speedTimeout: 20000,
+  concurrency: 16,
+  latencyTimeout: 5000,
+  speedTimeout: 12000,
   // 每个节点测速下载的大小（MB）。10MB × 上千节点会吃掉几十 GB 流量，5MB 足够反映带宽
   speedBytes: 5,
   speedSource: 'cloudflare',

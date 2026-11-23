@@ -8,7 +8,7 @@ const { testLatency, testSpeed, fetchExitIP, testTcp, DOMESTIC_LATENCY_URLS, DEF
 const geo = require('./geo');
 const { UDP_TYPES } = require('./parser');
 
-const CHUNK_SIZE = 500;
+const CHUNK_SIZE = 300;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -184,7 +184,7 @@ class Runner {
 
           // 1) TCP 握手
           if (!isUdp) {
-            const tcp = await testTcp(node.server, Number(node.port), Math.min(latencyTimeout, 5000));
+            const tcp = await testTcp(node.server, Number(node.port), Math.min(latencyTimeout, 3000));
             patch.tcp = tcp.ok ? tcp.ms : null;
             if (!tcp.ok && !wantIp) {
               // TCP 都不通，直接判定失败（UDP 类协议跳过）
@@ -311,7 +311,7 @@ class Runner {
         if (deep) {
           await pool(
             okNodes,
-            Math.min(6, concurrency),
+            Math.min(10, concurrency),
             async (n) => {
               const r = await geo.checkDnsbl(n.ip);
               dnsblMap.set(n.id, r);

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, Tray, Menu, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, Tray, Menu, nativeImage, screen, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -671,6 +671,14 @@ function buildMainWindow() {
   });
   win.webContents.on('did-finish-load', () => {
     renderCrashCount = 0;
+    // 首帧兜底：个别机器上 ready-to-show 会被合成器拖到几秒后（页面其实早加载完了），
+    // 页面 did-finish-load 就直接显示，保证窗口 0.2~0.3s 出画面。
+    if (win && !win.isDestroyed() && !win.isVisible()) {
+      bootLog('did-finish-load 直接显示窗口');
+      try {
+        win.show();
+      } catch (e) {}
+    }
     if (!pendingGuardNotice) return;
     win.webContents.send('net:guard-notice', pendingGuardNotice);
     pendingGuardNotice = null;
@@ -946,7 +954,7 @@ async function restoreProxyOnLaunch() {
     enableSystemProxy(pick.id, s.lastProxyMode === 'tun' ? 'tun' : 'system')
       .then(() => bootLog('已自动恢复上次的代理状态'))
       .catch((err) => bootLog('自动恢复代理失败: ' + (err && err.message)));
-  }, 3000);
+  }, 1500);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1041,12 +1049,118 @@ function stopProxyWatch() {
 /* 初始化                                                              */
 /* ------------------------------------------------------------------ */
 
+
+
+/** 老默认值（并发 8 / 延迟 8s / 测速 20s / 10MB）迁移到更快的档位；只迁移仍是旧默认的设置，不动自定义值 */
+function migratePerfDefaults() {
+  try {
+    const raw = store.read('settings.json', {}) || {};
+    const next = {};
+    if (raw.concurrency === 8) next.concurrency = DEFAULT_SETTINGS.concurrency;
+    if (raw.latencyTimeout === 8000) next.latencyTimeout = DEFAULT_SETTINGS.latencyTimeout;
+    if (raw.speedTimeout === 20000) next.speedTimeout = DEFAULT_SETTINGS.speedTimeout;
+    if (raw.speedBytes === 10) next.speedBytes = DEFAULT_SETTINGS.speedBytes;
+    if (Object.keys(next).length) {
+      store.write('settings.json', Object.assign({}, raw, next));
+      bootLog('性能默认值已迁移: ' + JSON.stringify(next));
+    }
+  } catch (e) {
+    bootLog('性能默认值迁移失败: ' + e.message);
+  }
+}
+
+/** 睡眠/休眠唤醒后：内核常常已经被系统掐掉，系统代理却还指着它 = 断网。
+ *  这里立刻探活，不活就按上次的节点把代理重建起来，比等 8s 看守循环快得多。 */
+async function recoverAfterResume() {
+  try {
+    const s = currentSettings();
+    if (!s.proxyOn) return;
+    if (gateway && gateway.running) {
+      const alive = await gateway.alive().catch(() => false);
+      if (alive) {
+        sendProxyState();
+        return;
+      }
+      // 进程还在但端口不通：先清掉僵尸内核，再重建
+      await gateway.stop({ silent: true }).catch(() => {});
+    }
+    const nodes = store.read('nodes.json', []);
+    const pick = (nodes || []).find((n) => n.id === s.lastNodeId) || (nodes || []).find((n) => n && n.status === 'ok');
+    if (!pick) {
+      bootLog('唤醒恢复跳过：没有可用节点');
+      return;
+    }
+    bootLog('唤醒后重建代理: ' + pick.id);
+    await enableSystemProxy(pick.id, s.lastProxyMode === 'tun' ? 'tun' : 'system');
+    bootLog('唤醒后代理已恢复');
+  } catch (e) {
+    bootLog('唤醒恢复失败: ' + (e && e.message));
+  }
+}
+
+/** 开机网络安全体检：reg/powershell 调用较重，放到窗口之后异步执行，避免阻塞首屏 */
+async function runStartupGuard() {
+  const __t0 = Date.now();
+  // 等自动恢复把内核拉起来再体检：否则体检可能把刚设好的系统代理当成「遗留残留」拆掉
+  const __waitStart = Date.now();
+  while (!(gateway && gateway.running) && Date.now() - __waitStart < 6000) {
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  // 自动恢复已经接管系统代理（内核在跑）时跳过体检：
+  // 否则 recoverIfStale 会把刚设好的代理当成「上次遗留的残留」还原掉。
+  if (gateway && gateway.running) {
+    bootLog('开机体检跳过：自动恢复已接管系统代理');
+    return;
+  }
+  bootLog('Gateway 就绪，开始开机网络安全体检');
+  /**
+   * ④ 恢复逻辑 / ⑥ 断网机制：开机第一件事是检查上次异常退出有没有把
+   * 系统代理锁死在失效端口。这一步必须发生在「开窗口」和「用户点开启」之前，
+   * 否则用户连界面里的自检都打不开（流量都进黑洞了）。
+   *
+   * 只看「确定是本工具留下的 + 端口确实没人监听」的项，绝不整体重置网络：
+   * 其它代理软件正在用的端口是活的，不会被误伤。
+   */
+  try {
+    const s0 = currentSettings();
+    const report = await netGuard.inspect(sysproxy, {
+      preferredPort: Number(s0.systemProxyPort) || DEFAULT_PORT,
+      gatewayRunning: false,
+      probe: false, // 开机不额外做外网探测，避免拖慢启动
+    });
+    if (report.findings.length) {
+      const fixed = await netGuard.repair(sysproxy, {
+        preferredPort: Number(s0.systemProxyPort) || DEFAULT_PORT,
+        gatewayRunning: false,
+        probe: false,
+      });
+      const critical = report.findings.filter((f) => f.level === 'critical');
+      if (critical.length) {
+        pendingGuardNotice = {
+          level: fixed.ok ? 'warn' : 'err',
+          title: fixed.ok ? '已自动修复上次遗留的代理设置' : '代理残留修复未完成',
+          text: fixed.summary,
+          details: fixed.actions.map((a) => `${a.ok ? '✓' : '✗'} ${a.label}${a.message ? '：' + a.message : ''}`),
+        };
+      }
+      bootLog('开机自愈：' + fixed.summary);
+    }
+    // 兼容旧路径：备份/标记指向同一地址但端口仍活着时也做一次常规还原
+    const rec = await sysproxy.recoverIfStale();
+    if (rec.recovered) bootLog('已还原上次遗留的系统代理设置: ' + rec.target);
+  } catch (e) {
+    bootLog('开机网络安全体检失败: ' + e.message);
+  }
+  bootLog('开机网络体检耗时 ' + (Date.now() - __t0) + 'ms');
+}
+
 app.whenReady().then(async () => {
   if (!gotLock) return; // 第二个实例已经在 second-instance 里处理完，不再初始化内核
   bootLog('whenReady 触发');
   const userData = app.getPath('userData');
   store = new Store(userData);
   nativeTheme.themeSource = 'dark';
+  migratePerfDefaults();
 
   core = new CoreManager({
     corePath: resolveCorePath(),
@@ -1094,50 +1208,14 @@ app.whenReady().then(async () => {
     },
   });
 
-  bootLog('Gateway 就绪，开始开机网络安全体检');
-  /**
-   * ④ 恢复逻辑 / ⑥ 断网机制：开机第一件事是检查上次异常退出有没有把
-   * 系统代理锁死在失效端口。这一步必须发生在「开窗口」和「用户点开启」之前，
-   * 否则用户连界面里的自检都打不开（流量都进黑洞了）。
-   *
-   * 只看「确定是本工具留下的 + 端口确实没人监听」的项，绝不整体重置网络：
-   * 其它代理软件正在用的端口是活的，不会被误伤。
-   */
-  try {
-    const s0 = currentSettings();
-    const report = await netGuard.inspect(sysproxy, {
-      preferredPort: Number(s0.systemProxyPort) || DEFAULT_PORT,
-      gatewayRunning: false,
-      probe: false, // 开机不额外做外网探测，避免拖慢启动
-    });
-    if (report.findings.length) {
-      const fixed = await netGuard.repair(sysproxy, {
-        preferredPort: Number(s0.systemProxyPort) || DEFAULT_PORT,
-        gatewayRunning: false,
-        probe: false,
-      });
-      const critical = report.findings.filter((f) => f.level === 'critical');
-      if (critical.length) {
-        pendingGuardNotice = {
-          level: fixed.ok ? 'warn' : 'err',
-          title: fixed.ok ? '已自动修复上次遗留的代理设置' : '代理残留修复未完成',
-          text: fixed.summary,
-          details: fixed.actions.map((a) => `${a.ok ? '✓' : '✗'} ${a.label}${a.message ? '：' + a.message : ''}`),
-        };
-      }
-      bootLog('开机自愈：' + fixed.summary);
-    }
-    // 兼容旧路径：备份/标记指向同一地址但端口仍活着时也做一次常规还原
-    const rec = await sysproxy.recoverIfStale();
-    if (rec.recovered) bootLog('已还原上次遗留的系统代理设置: ' + rec.target);
-  } catch (e) {
-    bootLog('开机网络安全体检失败: ' + e.message);
-  }
-
+  bootLog('Gateway 就绪');
+  // 首屏优先：开机体检要跑 reg query / powershell（本机实测 4~5s），
+  // 不能再挡在首帧前面；改为窗口创建之后异步执行。
   bootLog('开始创建窗口');
   ensureMainWindow();
   createTray();
   bootLog('窗口创建完成');
+  restoreProxyOnLaunch();
 
   // 启动阶段来的「再点一次」请求，现在窗口已经在了，补一次聚焦
   if (pendingSecondLaunch) {
@@ -1147,8 +1225,15 @@ app.whenReady().then(async () => {
   // 兜底：老版本或异常路径可能留下重复主窗口，启动 2 秒后再清一次（只动主窗口）
   setTimeout(() => ensureMainWindow(), 2000);
 
+  runStartupGuard();
+  // 睡眠唤醒 / 解锁后立刻检查内核，而不是等看守循环（8~25s）
+  try {
+    powerMonitor.on('resume', () => recoverAfterResume());
+    powerMonitor.on('unlock-screen', () => recoverAfterResume());
+  } catch (e) {
+    bootLog('注册唤醒恢复失败: ' + e.message);
+  }
   startProxyWatch();
-  restoreProxyOnLaunch();
 
   // 自动化冒烟测试用：启动后自动退出（会走完整的还原 + 退出流程）
   if (process.env.V2P_EXIT_AFTER) {
@@ -1179,31 +1264,37 @@ app.on('before-quit', async (e) => {
       /* 已销毁 */
     }
   }
+  const __q0 = Date.now();
+  bootLog('退出流程开始');
   try {
     // 退出前必须还原系统代理，否则用户会「上不了网」。
-    // Windows 关机时留给应用的窗口很短，任何一步卡住都要超时放行，
-    // 不能因为 reg/powershell 慢就让用户关不了机。
+    // 关机留给应用的窗口很短：先同步关开关（毫秒级），再把「还原快照」和「停内核」并行跑，
+    // 各自带短超时，绝不串行叠加等待。
     const withTimeout = (p, ms) =>
       Promise.race([Promise.resolve(p).catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
 
+      // 停内核放到「代理开关已关」之后执行：先关开关再杀内核，中间不留断网窗口
+      const stopLater = [];
+      const queueStop = (fn, ms) => stopLater.push(() => withTimeout(fn(), ms));
+      if (gateway) queueStop(() => gateway.stop(), 900);
+      if (core) queueStop(() => core.stop(), 900);
+
     if (sysproxy) {
-      // ① 同步先关开关（毫秒级）：哪怕后面异步还原被系统掐断，
-      // 也只会剩下「直连 + 一个没人用的地址」，不会整机断网。
+      // ① 同步先关开关：哪怕后面异步还原被系统掐断，也只会剩「直连 + 没人用的地址」
       try {
         sysproxy.disableSync();
       } catch (e) {}
-      let restored = false;
-      try {
-        await withTimeout(sysproxy.restore(), 4000);
-        restored = (await sysproxy.status().catch(() => ({}))).proxyEnable === 0;
-      } catch (e) {}
-      if (!restored) {
-        // 兜底：只关开关、清失效地址，不做完整快照还原
-        await withTimeout(sysproxy.forceDirect(), 2500);
+      // 还原快照是「尽力而为」：disableSync 已同步把开关关掉，
+      // 这里不再 await 它（一次 restore 要跑好几个 reg/powershell，约 1~2s），
+      // 否则用户每次关闭都要多等 2 秒。写不完最多留个没人用的地址，不会断网。
+      withTimeout(sysproxy.restore(), 1500).then(() => {
+        sysproxy.status().catch(() => ({})).then((st) => {
+          if (st.proxyEnable === 1) withTimeout(sysproxy.forceDirect(), 1000);
+        });
+      });
       }
-    }
-    if (gateway) await withTimeout(gateway.stop(), 1500);
-    if (core) await withTimeout(core.stop(), 1500);
+    await Promise.allSettled(stopLater.map((fn) => fn()));
+    bootLog('退出流程耗时 ' + (Date.now() - __q0) + 'ms');
   } finally {
     app.exit(0);
   }
