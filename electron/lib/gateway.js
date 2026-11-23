@@ -31,8 +31,34 @@ const SELF_CHECK_RULES = [
 
 const DEFAULT_FORCE_PROXY_DOMAINS = ['minimax.io'];
 const DEFAULT_OVERSEAS_DNS_DOMAINS = ['+.minimax.io'];
-// 双站点服务用的境外 DNS：境内 DNS 会返回境内边缘 IP，节点连过去照样被当成国内网络
-const OVERSEAS_DOH = ['https://dns.google/dns-query', 'https://1.1.1.1/dns-query'];
+// 双站点服务用的境外 DNS：境内 DNS 会返回境内边缘 IP。
+// 系统代理模式下客户端发的是域名、由节点侧解析，这层主要是给 TUN 模式兜底。
+const OVERSEAS_DOH = [
+  'https://dns.google/dns-query',
+  'https://cloudflare-dns.com/dns-query',
+  'https://1.1.1.1/dns-query',
+];
+
+/** 规则里的域名归一：去掉 *. 与开头的点，DOMAIN-SUFFIX 只认裸域名 */
+function normalizeDomain(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/^\*\./, '')
+    .replace(/^\./, '');
+}
+
+/**
+ * nameserver-policy 的键：`+.example.com` 匹配子域，`example.com` 只匹配自身。
+ * 用户只写裸域名时补成 `+.`，否则 agent.minimax.io 这类子域根本不会命中策略。
+ */
+function dnsPolicyKeys(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return [];
+  if (s.startsWith('+.')) return [s];
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(s) || s.includes('/') || s.includes(':')) return [s];
+  const bare = normalizeDomain(s);
+  return bare ? [bare, '+.' + bare] : [];
+}
 
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -187,7 +213,7 @@ class Gateway {
     try {
       const s = JSON.parse(fs.readFileSync(path.join(this.dataDir, '..', 'settings.json'), 'utf8')) || {};
       const list = Array.isArray(s.forceProxyDomains) ? s.forceProxyDomains : DEFAULT_FORCE_PROXY_DOMAINS;
-      return list.map((d) => String(d || '').trim()).filter(Boolean);
+      return list.map(normalizeDomain).filter(Boolean);
     } catch (e) {
       return DEFAULT_FORCE_PROXY_DOMAINS.slice();
     }
@@ -229,7 +255,7 @@ class Gateway {
       throw new Error(`缺少分流规则文件 ${missing.join(', ')}，请执行 npm run fetch-rules 后重新打包`);
     }
 
-    const forceRules = this.readForceProxyDomains().map((d) => `DOMAIN-SUFFIX,${d},PROXY`);
+    const forceRules = [...new Set(this.readForceProxyDomains().map((d) => `DOMAIN-SUFFIX,${d},PROXY`))];
     const rules =
       mode === 'bypass-cn'
         ? [...SELF_CHECK_RULES, ...forceRules, 'RULE-SET,cn-domain,DIRECT', 'RULE-SET,cn-cidr,DIRECT', 'MATCH,PROXY']
@@ -313,12 +339,17 @@ class Gateway {
         ],
         'default-nameserver': ['223.5.5.5', '119.29.29.29'],
         nameserver: ['223.5.5.5', '119.29.29.29', '8.8.8.8'],
-        // 双站点服务的境外域名必须走境外 DNS：本机 DNS 会返回境内的 Akamai/CDN
-        // 边缘 IP，流量走了节点也会被服务端按国内网络处理（MiniMax 全球站就是这样被 307）
+        // 双站点服务的境外域名走境外 DNS：本机 DNS 会返回境内的 Akamai/CDN
+        // 边缘 IP，流量走了节点也可能被服务端按国内网络处理（MiniMax 全球站就是这样被 307）。
+        // TUN 模式下解析由内核自己做，这层必须有；系统代理模式由节点侧解析，属于兜底。
         ...(() => {
           const list = this.readOverseasDnsDomains();
           if (!list.length) return {};
-          return { 'nameserver-policy': Object.fromEntries(list.map((d) => [d, OVERSEAS_DOH])) };
+          const policy = {};
+          for (const d of list) {
+            for (const key of dnsPolicyKeys(d)) policy[key] = OVERSEAS_DOH;
+          }
+          return Object.keys(policy).length ? { 'nameserver-policy': policy } : {};
         })(),
       },
       proxies: [
