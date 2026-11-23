@@ -52,18 +52,21 @@ if (!gotLock) {
       createWindow();
       return;
     }
-    // 顺手清掉多余的重复主窗口，只保留一个
+    // 顺手清掉多余的重复主窗口，只保留一个。
+    // 判据必须用 webContents 的 URL，不能用窗口标题：流量悬浮窗没有自己的 title，
+    // 标题可能取到文件路径（路径里就带 V2PTools 字样），按标题匹配会把悬浮窗一起销毁；
+    // 而且 destroy() 不触发 close 事件，悬浮窗的贴边位置也就存不下来。
+    // 只认「加载了 renderer/index.html 的窗口」，才是真正的重复主窗口。
     for (const w of alive) {
       if (w === target) continue;
-      let title = '';
+      let url = '';
       try {
-        title = w.getTitle() || '';
+        url = (w.webContents && w.webContents.getURL()) || '';
       } catch (e) {}
-      if (/V2PTools/i.test(title)) {
-        try {
-          w.destroy();
-        } catch (e) {}
-      }
+      if (!/renderer[\\/]+index\.html/i.test(url)) continue;
+      try {
+        w.destroy();
+      } catch (e) {}
     }
     if (target.isMinimized()) target.restore();
     if (!target.isVisible()) target.show();
@@ -1125,7 +1128,13 @@ ipcMain.handle('store:get', (e, key) => {
 
 ipcMain.handle('store:set', (e, key, value) => {
   if (key === 'nodes') return store.write('nodes.json', value);
-  if (key === 'settings') return store.write('settings.json', value);
+  if (key === 'settings') {
+    // 代理运行态字段由主进程独占维护。界面里的 settings 是启动时的快照，
+    // 用户先点过「启动」、再来保存设置时，快照里的 proxyOn 还是 false，
+    // 整包覆盖会把自动恢复标记抹掉 —— 下次启动就不自动开代理了。
+    const { proxyOn, lastNodeId, lastProxyMode } = currentSettings();
+    return store.write('settings.json', { ...(value || {}), proxyOn, lastNodeId, lastProxyMode });
+  }
   if (key === 'sources') return store.write('sources.json', value);
   return false;
 });

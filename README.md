@@ -273,6 +273,18 @@ npm run test-ruleformat   # 规则文本解析与格式校验（20 项）
 | 绕过代理的地址 | 分号分隔，留空用默认内网列表 |
 | WinHTTP 代理 | 可选，需管理员权限 |
 
+下面三项没有界面，直接改 `%APPDATA%\V2PTools\settings.json`，重启应用后生效：
+
+| 键 | 说明 |
+|---|---|
+| `forceProxyDomains` | 强制走节点的域名，写裸域名（如 `minimax.io`），生成 `DOMAIN-SUFFIX,<域>,PROXY` 并排在 `cn-domain` 直连规则之前。给「国内站 + 全球站同名」的服务用，默认 `["minimax.io"]` |
+| `overseasDnsDomains` | 这些域名的 DNS 走境外 DoH（`dns.google` / `cloudflare-dns.com` / `1.1.1.1`）。支持 `+.example.com`；只写裸域名会自动补成子域匹配。TUN 模式下必需，系统代理模式属于兜底 |
+| `proxyOn` / `lastNodeId` / `lastProxyMode` | 代理运行态，主进程独占维护：开启成功写 `true`，主动关闭写 `false`，重启后据此自动恢复上次状态（不会强行打开用户主动关掉的代理） |
+
+> 典型场景：MiniMax 的 `agent.minimax.io`（全球站）被 `cn-domain` 规则集判成国内域名直连，
+> 拿到境内边缘 IP 后被服务端 307 跳到 `agent.minimaxi.com`，表现就是登录成功但取不到额度、签到报错。
+> 把 `minimax.io` 加进 `forceProxyDomains` 即可，`minimaxi.com` 仍按国内直连。
+
 ---
 
 ## 已知限制
