@@ -23,6 +23,67 @@ const { deriveProxyState, pickRouteMode, STATE_TEXT } = require('./lib/proxyStat
 const isDev = process.argv.includes('--dev');
 
 let win = null;
+/** 主窗口是否正在创建：并发调用时用它拦住第二次建窗（启动阶段点击多开就是这么来的） */
+let creatingWindow = false;
+/** app 还没 ready 时收到的第二次启动请求：先记下，等窗口建好再聚焦 */
+let pendingSecondLaunch = false;
+
+/** 只有加载了 renderer/index.html 的窗口才算主窗口；流量悬浮窗没有页面标题，不能按标题判断 */
+function isMainWindow(w) {
+  try {
+    if (w === win) return true;
+    const url = (w.webContents && w.webContents.getURL()) || '';
+    return /renderer[\\/]+index\.html/i.test(url);
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * 单窗口守卫：已有主窗口就叫到前台、销毁重复的主窗口，真没有才新建。
+ * second-instance / 托盘「显示主窗口」/ activate / 启动流程全部走这里，
+ * 避免各处各自 createWindow() 造成「点一次多一个窗口」。
+ */
+function ensureMainWindow({ flash = false } = {}) {
+  const alive = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+  const mains = alive.filter(isMainWindow);
+  const primary = win && !win.isDestroyed() ? win : mains[0] || null;
+
+  if (!primary) {
+    if (creatingWindow) return win;
+    return createWindow();
+  }
+
+  // 只清重复的主窗口，悬浮窗和其它窗口一律不动
+  for (const w of mains) {
+    if (w === primary) continue;
+    try {
+      w.destroy();
+    } catch (e) {}
+  }
+
+  try {
+    if (primary.isMinimized()) primary.restore();
+  } catch (e) {}
+  try {
+    if (!primary.isVisible()) primary.show();
+  } catch (e) {}
+  try {
+    primary.setSkipTaskbar(false);
+  } catch (e) {}
+  try {
+    primary.focus();
+  } catch (e) {}
+  if (flash) {
+    try {
+      primary.flashFrame(true);
+      setTimeout(() => {
+        if (primary && !primary.isDestroyed()) primary.flashFrame(false);
+      }, 2500);
+    } catch (e) {}
+  }
+  return primary;
+}
 let store = null;
 let core = null;
 let runner = null;
@@ -44,42 +105,13 @@ if (!gotLock) {
 } else {
   app.on('second-instance', () => {
     bootLog('second-instance');
-    // 以「真实存在的窗口」为准：win 变量在托盘隐藏、重建等场景可能已经失联，
-    // 只看 win 会误判成没有窗口、再 createWindow()，结果多出一个一模一样的窗口
-    const alive = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
-    const target = win && !win.isDestroyed() ? win : alive[0];
-    if (!target) {
-      createWindow();
+    // 启动阶段窗口还没建出来时不能在这里建窗：app ready 之前 new BrowserWindow()
+    // 会直接抛错（表现就是「点几下就闪退」）；而 whenReady 里还会再建一个（变成多窗口）。
+    if (!app.isReady() || creatingWindow) {
+      pendingSecondLaunch = true;
       return;
     }
-    // 顺手清掉多余的重复主窗口，只保留一个。
-    // 判据必须用 webContents 的 URL，不能用窗口标题：流量悬浮窗没有自己的 title，
-    // 标题可能取到文件路径（路径里就带 V2PTools 字样），按标题匹配会把悬浮窗一起销毁；
-    // 而且 destroy() 不触发 close 事件，悬浮窗的贴边位置也就存不下来。
-    // 只认「加载了 renderer/index.html 的窗口」，才是真正的重复主窗口。
-    for (const w of alive) {
-      if (w === target) continue;
-      let url = '';
-      try {
-        url = (w.webContents && w.webContents.getURL()) || '';
-      } catch (e) {}
-      if (!/renderer[\\/]+index\.html/i.test(url)) continue;
-      try {
-        w.destroy();
-      } catch (e) {}
-    }
-    if (target.isMinimized()) target.restore();
-    if (!target.isVisible()) target.show();
-    try {
-      target.setSkipTaskbar(false);
-    } catch (e) {}
-    target.focus();
-    try {
-      target.flashFrame(true);
-      setTimeout(() => {
-        if (target && !target.isDestroyed()) target.flashFrame(false);
-      }, 2500);
-    } catch (e) {}
+    ensureMainWindow({ flash: true });
   });
 }
 
@@ -170,9 +202,7 @@ function createTray() {
   }
 
   const showWindow = () => {
-    if (!win) return createWindow();
-    win.show();
-    win.focus();
+    ensureMainWindow();
   };
 
   tray.setContextMenu(
@@ -529,6 +559,18 @@ ipcMain.on('traffic:close', () => {
 });
 
 function createWindow() {
+  // 已有主窗口就不再建；正在创建时并发调用也直接返回，避免一次点击建出两个
+  if (creatingWindow) return win;
+  if (win && !win.isDestroyed()) return win;
+  creatingWindow = true;
+  try {
+    return buildMainWindow();
+  } finally {
+    creatingWindow = false;
+  }
+}
+
+function buildMainWindow() {
   bootLog('createWindow 开始');
   win = new BrowserWindow({
     width: 1440,
@@ -660,6 +702,8 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  return win;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1034,9 +1078,17 @@ app.whenReady().then(async () => {
   }
 
   bootLog('开始创建窗口');
-  createWindow();
+  ensureMainWindow();
   createTray();
   bootLog('窗口创建完成');
+
+  // 启动阶段来的「再点一次」请求，现在窗口已经在了，补一次聚焦
+  if (pendingSecondLaunch) {
+    pendingSecondLaunch = false;
+    setTimeout(() => ensureMainWindow({ flash: true }), 200);
+  }
+  // 兜底：老版本或异常路径可能留下重复主窗口，启动 2 秒后再清一次（只动主窗口）
+  setTimeout(() => ensureMainWindow(), 2000);
 
   startProxyWatch();
   restoreProxyOnLaunch();
@@ -1047,7 +1099,7 @@ app.whenReady().then(async () => {
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    ensureMainWindow();
   });
 });
 
