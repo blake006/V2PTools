@@ -226,13 +226,26 @@ function createTray() {
   if (tray) return;
 
   let icon = null;
-  try {
-    const ico = path.join(__dirname, '..', 'build', 'icon.ico');
-    if (fs.existsSync(ico)) icon = nativeImage.createFromPath(ico);
-  } catch (e) {
-    /* 图标读不到就用系统给的可执行文件图标兜底 */
+  // 图标候选路径：electron/assets（随 electron/** 进包，最可靠）→ build/（本打包额外带入）→ resources/build
+  const iconCandidates = [
+    path.join(__dirname, 'assets', 'icon.ico'),
+    path.join(__dirname, 'assets', 'icon.png'),
+    path.join(__dirname, '..', 'build', 'icon.ico'),
+    process.resourcesPath ? path.join(process.resourcesPath, 'build', 'icon.ico') : '',
+  ];
+  for (const p of iconCandidates) {
+    if (!p) continue;
+    try {
+      if (!fs.existsSync(p)) continue;
+      const img = nativeImage.createFromPath(p);
+      if (img && !img.isEmpty()) {
+        icon = img;
+        break;
+      }
+    } catch (e) {
+      /* 单个候选失败不影响后续 */
+    }
   }
-
   tray = new Tray(icon && !icon.isEmpty() ? icon : nativeImage.createEmpty());
   tray.setToolTip('V2PTools');
 
