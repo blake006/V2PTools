@@ -25,6 +25,14 @@ const SELF_CHECK_RULES = [
   'DOMAIN,ifconfig.me,PROXY',
   'DOMAIN,ip-api.com,PROXY',
 ];
+// 境内 / 境外同名的「双站点」服务（如 MiniMax 的 global 与国内站）不能写死在这里，
+// 统一来自 settings.json 的 forceProxyDomains / overseasDnsDomains，
+// 这样加服务不用重新打包（见 readForceProxyDomains / readOverseasDnsDomains）。
+
+const DEFAULT_FORCE_PROXY_DOMAINS = ['minimax.io'];
+const DEFAULT_OVERSEAS_DNS_DOMAINS = ['+.minimax.io'];
+// 双站点服务用的境外 DNS：境内 DNS 会返回境内边缘 IP，节点连过去照样被当成国内网络
+const OVERSEAS_DOH = ['https://dns.google/dns-query', 'https://1.1.1.1/dns-query'];
 
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -174,6 +182,28 @@ class Gateway {
     return v.count;
   }
 
+  /** 读取 settings.json 里需要「强制走节点」的域名 */
+  readForceProxyDomains() {
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(this.dataDir, '..', 'settings.json'), 'utf8')) || {};
+      const list = Array.isArray(s.forceProxyDomains) ? s.forceProxyDomains : DEFAULT_FORCE_PROXY_DOMAINS;
+      return list.map((d) => String(d || '').trim()).filter(Boolean);
+    } catch (e) {
+      return DEFAULT_FORCE_PROXY_DOMAINS.slice();
+    }
+  }
+
+  /** 读取 settings.json 里需要走境外 DNS 的域名（支持 +.example.com 通配写法） */
+  readOverseasDnsDomains() {
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(this.dataDir, '..', 'settings.json'), 'utf8')) || {};
+      const list = Array.isArray(s.overseasDnsDomains) ? s.overseasDnsDomains : DEFAULT_OVERSEAS_DNS_DOMAINS;
+      return list.map((d) => String(d || '').trim()).filter(Boolean);
+    } catch (e) {
+      return DEFAULT_OVERSEAS_DNS_DOMAINS.slice();
+    }
+  }
+
   /** 按路由模式生成 rule-providers / rules */
   buildRouting(routeMode) {
     const mode = ROUTE_MODES[routeMode] ? routeMode : 'global';
@@ -199,10 +229,11 @@ class Gateway {
       throw new Error(`缺少分流规则文件 ${missing.join(', ')}，请执行 npm run fetch-rules 后重新打包`);
     }
 
+    const forceRules = this.readForceProxyDomains().map((d) => `DOMAIN-SUFFIX,${d},PROXY`);
     const rules =
       mode === 'bypass-cn'
-        ? [...SELF_CHECK_RULES, 'RULE-SET,cn-domain,DIRECT', 'RULE-SET,cn-cidr,DIRECT', 'MATCH,PROXY']
-        : [...SELF_CHECK_RULES, 'RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT'];
+        ? [...SELF_CHECK_RULES, ...forceRules, 'RULE-SET,cn-domain,DIRECT', 'RULE-SET,cn-cidr,DIRECT', 'MATCH,PROXY']
+        : [...SELF_CHECK_RULES, ...forceRules, 'RULE-SET,gfw-domain,PROXY', 'MATCH,DIRECT'];
     return { providers, rules };
   }
 
@@ -282,6 +313,13 @@ class Gateway {
         ],
         'default-nameserver': ['223.5.5.5', '119.29.29.29'],
         nameserver: ['223.5.5.5', '119.29.29.29', '8.8.8.8'],
+        // 双站点服务的境外域名必须走境外 DNS：本机 DNS 会返回境内的 Akamai/CDN
+        // 边缘 IP，流量走了节点也会被服务端按国内网络处理（MiniMax 全球站就是这样被 307）
+        ...(() => {
+          const list = this.readOverseasDnsDomains();
+          if (!list.length) return {};
+          return { 'nameserver-policy': Object.fromEntries(list.map((d) => [d, OVERSEAS_DOH])) };
+        })(),
       },
       proxies: [
         {
