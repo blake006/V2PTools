@@ -83,6 +83,14 @@ function ensureMainWindow({ flash = false } = {}) {
     } catch (e) {}
   }
 
+  const dumpWin = (w) => {
+    try {
+      return JSON.stringify({ min: w.isMinimized(), vis: w.isVisible(), b: w.getBounds(), nb: w.getNormalBounds() });
+    } catch (e) {
+      return 'dump-fail';
+    }
+  };
+  bootLog('ensureMainWindow 进入 ' + dumpWin(primary));
   try {
     if (primary.isMinimized()) primary.restore();
   } catch (e) {}
@@ -94,6 +102,16 @@ function ensureMainWindow({ flash = false } = {}) {
     if (primary.isMinimized()) primary.restore();
   } catch (e) {}
   ensureOnScreenBounds(primary);
+  // 最小化兜底：某些情况下 restore() 不生效（窗口被系统最小化后仍报 isMinimized），
+  // 用「按正常尺寸重新 setBounds + show」强制把窗口拉回屏幕
+  try {
+    if (primary.isMinimized() || !primary.isVisible()) {
+      const nb = primary.getNormalBounds();
+      primary.setBounds({ x: nb.x, y: nb.y, width: nb.width, height: nb.height });
+      primary.show();
+    }
+  } catch (e) {}
+  bootLog('ensureMainWindow 退出 ' + dumpWin(primary));
   try {
     primary.setSkipTaskbar(false);
   } catch (e) {}
