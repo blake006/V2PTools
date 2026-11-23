@@ -44,20 +44,37 @@ if (!gotLock) {
 } else {
   app.on('second-instance', () => {
     bootLog('second-instance');
-    if (!win || win.isDestroyed()) {
+    // 以「真实存在的窗口」为准：win 变量在托盘隐藏、重建等场景可能已经失联，
+    // 只看 win 会误判成没有窗口、再 createWindow()，结果多出一个一模一样的窗口
+    const alive = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+    const target = win && !win.isDestroyed() ? win : alive[0];
+    if (!target) {
       createWindow();
       return;
     }
-    if (win.isMinimized()) win.restore();
-    if (!win.isVisible()) win.show();
+    // 顺手清掉多余的重复主窗口，只保留一个
+    for (const w of alive) {
+      if (w === target) continue;
+      let title = '';
+      try {
+        title = w.getTitle() || '';
+      } catch (e) {}
+      if (/V2PTools/i.test(title)) {
+        try {
+          w.destroy();
+        } catch (e) {}
+      }
+    }
+    if (target.isMinimized()) target.restore();
+    if (!target.isVisible()) target.show();
     try {
-      win.setSkipTaskbar(false);
+      target.setSkipTaskbar(false);
     } catch (e) {}
-    win.focus();
+    target.focus();
     try {
-      win.flashFrame(true);
+      target.flashFrame(true);
       setTimeout(() => {
-        if (win && !win.isDestroyed()) win.flashFrame(false);
+        if (target && !target.isDestroyed()) target.flashFrame(false);
       }, 2500);
     } catch (e) {}
   });
@@ -757,8 +774,17 @@ async function enableSystemProxy(nodeId, mode = 'system') {
     }
   }
 
+  // 记住这次的开启状态：下次启动应用自动恢复，省得每次手动点「启动」
+  try {
+    store.write('settings.json', {
+      ...currentSettings(),
+      proxyOn: true,
+      lastNodeId: node.id,
+      lastProxyMode: wantTun ? 'tun' : 'system',
+    });
+  } catch (err) {}
+
   sendProxyState();
-  // 顺带报一下环境冲突：机器上还开着别的代理软件时，系统代理会被它们抢走或绕过
   const conflicts = await detectConflicts().catch(() => null);
   const st = await proxyStatus();
   return { ...st, conflicts };
@@ -786,11 +812,37 @@ async function disableSystemProxy() {
   if (!restoreErr || sys.proxyEnable === 0) {
     if (gateway) await gateway.stop().catch(() => {});
   }
+  // 主动关闭 = 下次启动不要再自动开
+  try {
+    store.write('settings.json', { ...currentSettings(), proxyOn: false });
+  } catch (err) {}
   sendProxyState();
   if (restoreErr && sys.proxyEnable !== 0) {
     throw new Error('还原系统代理失败：' + restoreErr.message + '（请用「一键修复网络」复位）');
   }
   return proxyStatus();
+}
+
+/**
+ * 启动时恢复上次的代理状态：上次是开着的，就自动把内核拉起来并接管系统代理。
+ * 用户主动关过（settings.proxyOn=false）则保持关闭，不会强行打开。
+ */
+async function restoreProxyOnLaunch() {
+  const s = currentSettings();
+  if (!s.proxyOn) return;
+  const nodes = store.read('nodes.json', []);
+  const usable = (nodes || []).filter((n) => n && n.type && n.server && n.port && n.status === 'ok');
+  const pick = (nodes || []).find((n) => n.id === s.lastNodeId) || usable[0];
+  if (!pick) {
+    bootLog('自动恢复代理跳过：没有可用节点');
+    return;
+  }
+  // 等窗口先出来，避免启动阶段和内核启动抢占
+  setTimeout(() => {
+    enableSystemProxy(pick.id, s.lastProxyMode === 'tun' ? 'tun' : 'system')
+      .then(() => bootLog('已自动恢复上次的代理状态'))
+      .catch((err) => bootLog('自动恢复代理失败: ' + (err && err.message)));
+  }, 3000);
 }
 
 /* ------------------------------------------------------------------ */
@@ -984,6 +1036,7 @@ app.whenReady().then(async () => {
   bootLog('窗口创建完成');
 
   startProxyWatch();
+  restoreProxyOnLaunch();
 
   // 自动化冒烟测试用：启动后自动退出（会走完整的还原 + 退出流程）
   if (process.env.V2P_EXIT_AFTER) {
