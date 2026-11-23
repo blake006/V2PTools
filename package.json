@@ -1,7 +1,7 @@
 {
   "name": "v2ptools",
   "productName": "V2PTools",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "V2PTools",
   "main": "electron/main.js",
   "author": {
@@ -10,86 +10,9 @@
   },
   "license": "MIT",
   "private": true,
-  "scripts": {
-    "start": "electron .",
-    "fetch-core": "node scripts/fetch-core.js",
-    "dev": "electron . --dev",
-    "pack": "electron-builder --dir",
-    "dist": "node scripts/preflight.js && node scripts/build-win.js",
-    "dist:zip": "node scripts/preflight.js && node scripts/build-win.js",
-    "dist:exe": "node scripts/preflight.js && node scripts/build-portable.js",
-    "test-sysproxy": "node scripts/test-sysproxy.js",
-    "test-netguard": "node scripts/test-netguard.js",
-    "test-gateway": "node scripts/test-gateway.js",
-    "test-proxystate": "node scripts/test-proxystate.js",
-    "test-ruleformat": "node scripts/test-ruleformat.js",
-    "test-clash": "node scripts/test-clash.js",
-    "test-subscribe": "electron scripts/test-subscribe.js",
-    "test-node-proxy": "electron scripts/test-node-proxy.js",
-    "verify-routing": "node scripts/verify-routing.js",
-    "verify-switch": "node scripts/verify-route-switch.js",
-    "bump": "node scripts/bump-version.js",
-    "icon": "electron scripts/make-icon.js",
-    "fetch-rules": "node scripts/fetch-rules.js",
-    "release": "node scripts/make-release.js",
-    "preflight": "node scripts/preflight.js",
-    "verify-package": "node scripts/verify-package.js",
-    "test-boot-guard": "node scripts/test-boot-guard.js",
-    "test-share-link": "node scripts/test-share-link.js"
-  },
   "dependencies": {
     "js-yaml": "^4.1.0",
     "qrcode": "^1.5.4",
     "qrcode-generator": "^2.0.4"
-  },
-  "devDependencies": {
-    "electron": "^32.3.3",
-    "electron-builder": "^25.1.8"
-  },
-  "build": {
-    "appId": "com.v2ptools.desktop",
-    "productName": "V2PTools",
-    "copyright": "Copyright © 2026 V2PTools",
-    "directories": {
-      "output": "dist",
-      "buildResources": "build"
-    },
-    "files": [
-      "electron/**/*",
-      "renderer/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "assets/rules",
-        "to": "rules"
-      },
-      {
-        "from": "vendor/mihomo.exe",
-        "to": "core/mihomo.exe"
-      },
-      {
-        "from": "vendor/wintun.dll",
-        "to": "core/wintun.dll"
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "zip",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "artifactName": "V2PTools-${version}-win-x64.${ext}",
-      "icon": "build/icon.ico",
-      "signAndEditExecutable": false
-    },
-    "portable": {
-      "artifactName": "V2PTools-${version}-win-x64-portable.${ext}",
-      "unpackDirName": "V2PTools"
-    },
-    "compression": "normal"
   }
 }
