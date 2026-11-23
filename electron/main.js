@@ -40,6 +40,27 @@ function isMainWindow(w) {
 }
 
 /**
+ * show/hide 往返后窗口可能停在 Chromium 给的屏外占位坐标（-25600,-25600、159x27），
+ * 表现就是「点了快捷方式但看不到窗口」。这里把明显异常的 bounds 拉回工作区中央。
+ */
+function ensureOnScreenBounds(w) {
+  try {
+    const b = w.getBounds();
+    const bad = b.x <= -10000 || b.y <= -10000 || b.width < 600 || b.height < 400;
+    if (!bad) return;
+    const wa = screen.getPrimaryDisplay().workArea;
+    const width = Math.min(1440, wa.width);
+    const height = Math.min(900, wa.height);
+    w.setBounds({
+      x: wa.x + Math.round((wa.width - width) / 2),
+      y: wa.y + Math.round((wa.height - height) / 2),
+      width,
+      height,
+    });
+  } catch (e) {}
+}
+
+/**
  * 单窗口守卫：已有主窗口就叫到前台、销毁重复的主窗口，真没有才新建。
  * second-instance / 托盘「显示主窗口」/ activate / 启动流程全部走这里，
  * 避免各处各自 createWindow() 造成「点一次多一个窗口」。
@@ -68,6 +89,11 @@ function ensureMainWindow({ flash = false } = {}) {
   try {
     if (!primary.isVisible()) primary.show();
   } catch (e) {}
+  // hide 之后 show 可能仍是「最小化 / 屏外」状态，先 restore 再把异常坐标拉回屏幕
+  try {
+    if (primary.isMinimized()) primary.restore();
+  } catch (e) {}
+  ensureOnScreenBounds(primary);
   try {
     primary.setSkipTaskbar(false);
   } catch (e) {}
