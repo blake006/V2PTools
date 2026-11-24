@@ -564,6 +564,7 @@ function updateSelInfo() {
   $('#btnDeleteSel').disabled = n === 0;
   const all = state.nodes.length > 0 && n === state.nodes.length;
   $('#checkAll').checked = all;
+  updateLocateBtn();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1622,6 +1623,70 @@ function multiSelHint() {
   return `已勾选 ${n} 个节点：系统代理一次只能用一个，请只勾选一个（或在行末点「设为系统代理」）`;
 }
 
+/* ------------------------------------------------------------------ */
+/* 定位当前代理 / 当前所选                                              */
+/* ------------------------------------------------------------------ */
+
+/** 定位目标：优先「系统代理使用中」的节点，其次「已勾选」的节点 */
+function locateTargets() {
+  const inUse = proxyInUseId();
+  if (inUse) {
+    const n = state.nodes.find((x) => x.id === inUse);
+    return { kind: 'proxy', ids: [inUse], label: n ? n.name || n.server : inUse };
+  }
+  if (state.selected.size) {
+    const ids = [...state.selected];
+    const first = state.nodes.find((x) => x.id === ids[0]);
+    return {
+      kind: 'selected',
+      ids,
+      label: ids.length === 1 && first ? first.name || first.server : `${ids.length} 个节点`,
+    };
+  }
+  return null;
+}
+
+/** 顶部「定位」按钮的可用态与提示文案 */
+function updateLocateBtn() {
+  const btn = $('#btnLocate');
+  if (!btn) return;
+  const t = locateTargets();
+  btn.disabled = !t;
+  if (!t) btn.title = '没有使用中的节点，也没有勾选节点';
+  else if (t.kind === 'proxy') btn.title = `定位到系统代理使用中的节点：${t.label}`;
+  else btn.title = `定位到已勾选的节点：${t.label}`;
+}
+
+/** 跳过去 + 闪一下：1451 行的表里靠滚动找当前节点太费劲 */
+function locateCurrent() {
+  const t = locateTargets();
+  if (!t) return toast('没有可定位的目标：系统代理未开启，也还没勾选节点', 'err');
+
+  // 目标可能被筛选条件挡住（按状态/分组/地区/搜索筛过），先放出来再滚
+  const blocked = t.ids.some((id) => {
+    const n = state.nodes.find((x) => x.id === id);
+    return n && !nodeVisible(n);
+  });
+  if (blocked) {
+    resetFilters();
+    toast('目标被筛选条件挡住了，已清除筛选', '', 2600);
+  }
+
+  const firstRow = rowMap.get(t.ids[0]);
+  if (!firstRow) return toast('目标节点不在当前表格里', 'err');
+
+  for (const id of t.ids) {
+    const tr = rowMap.get(id);
+    if (!tr) continue;
+    tr.classList.remove('locate-flash');
+    void tr.offsetWidth; // 强制重绘，让同一个节点可以反复闪
+    tr.classList.add('locate-flash');
+    setTimeout(() => tr.classList.remove('locate-flash'), 1600);
+  }
+  firstRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  toast((t.kind === 'proxy' ? '已定位到当前代理：' : '已定位到已勾选：') + t.label, 'ok', 2000);
+}
+
 const ROUTE_LABEL = { global: '全局代理', 'bypass-cn': '绕过大陆', 'proxy-list': '仅名单代理' };
 
 function currentRouteMode() {
@@ -1714,6 +1779,7 @@ function renderProxyState(st) {
 
   // 只有「使用中的节点」变化时才重绘表格，避免每次状态推送都闪一下
   const sig = `${on}|${gw.port}|${node ? node.id : ''}`;
+  updateLocateBtn();
   if (state.__proxySig !== sig) {
     state.__proxySig = sig;
     if (state.nodes.length) renderTable();
@@ -2153,6 +2219,7 @@ $$('#testMenu button').forEach((b) => {
   });
 });
 $('#btnProxy').addEventListener('click', toggleSystemProxy);
+$('#btnLocate').addEventListener('click', locateCurrent);
 
 $('#btnProxyMenu').addEventListener('click', (e) => {
   e.stopPropagation();
