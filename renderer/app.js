@@ -354,17 +354,31 @@ function sortedNodes() {
     // IP 类型按「住宅 > 移动 > 机房 > 代理 > 未知」的业务顺序排，按字母排没有意义
     if (key === 'ipTypeKey') {
       const order = ['residential', 'mobile', 'hosting', 'proxy', 'unknown'];
+      // 没有类型结论（未检测 / 数据缺失）的沉底，升序降序都一样
+      const known = (v) => (v && order.indexOf(v) >= 0 && v !== 'unknown' ? 1 : 0);
+      const ka = known(va);
+      const kb = known(vb);
+      if (ka !== kb) return kb - ka; // 有结论的永远在前
       const ra = order.indexOf(va) < 0 ? order.length : order.indexOf(va);
       const rb = order.indexOf(vb) < 0 ? order.length : order.indexOf(vb);
+      if (ra === rb) return 0;
       return (ra - rb) * dir;
     }
     if (num.includes(key)) {
-      if (va == null) va = Infinity;
-      if (vb == null) vb = Infinity;
-      return (va - vb) * dir;
+      // 空值 / 无效值永远排最后，不随升降序翻面（降序时 Infinity 曾跑到最前面）
+      const na = va == null || va === '' || Number.isNaN(Number(va));
+      const nb = vb == null || vb === '' || Number.isNaN(Number(vb));
+      if (na && nb) return 0;
+      if (na) return 1;
+      if (nb) return -1;
+      return (Number(va) - Number(vb)) * dir;
     }
-    va = String(va == null ? '' : va);
-    vb = String(vb == null ? '' : vb);
+    va = String(va == null ? '' : va).trim();
+    vb = String(vb == null ? '' : vb).trim();
+    // 空字符串同理：没填的项一律沉底
+    if (!va && !vb) return 0;
+    if (!va) return 1;
+    if (!vb) return -1;
     return va.localeCompare(vb, 'zh') * dir;
   });
   return arr;
@@ -1657,13 +1671,12 @@ function updateLocateBtn() {
   else btn.title = `定位到已勾选的节点：${t.label}`;
 }
 
-/** 跳过去 + 闪一下：1451 行的表里靠滚动找当前节点太费劲 */
-function locateCurrent() {
-  const t = locateTargets();
-  if (!t) return toast('没有可定位的目标：系统代理未开启，也还没勾选节点', 'err');
+/** 滚到指定节点（可多个）+ 闪一下：1451 行的表里靠滚动找当前节点太费劲 */
+function locateNodeIds(ids, msg) {
+  if (!ids || !ids.length) return toast('没有可定位的目标', 'err');
 
   // 目标可能被筛选条件挡住（按状态/分组/地区/搜索筛过），先放出来再滚
-  const blocked = t.ids.some((id) => {
+  const blocked = ids.some((id) => {
     const n = state.nodes.find((x) => x.id === id);
     return n && !nodeVisible(n);
   });
@@ -1672,10 +1685,10 @@ function locateCurrent() {
     toast('目标被筛选条件挡住了，已清除筛选', '', 2600);
   }
 
-  const firstRow = rowMap.get(t.ids[0]);
+  const firstRow = rowMap.get(ids[0]);
   if (!firstRow) return toast('目标节点不在当前表格里', 'err');
 
-  for (const id of t.ids) {
+  for (const id of ids) {
     const tr = rowMap.get(id);
     if (!tr) continue;
     tr.classList.remove('locate-flash');
@@ -1684,7 +1697,19 @@ function locateCurrent() {
     setTimeout(() => tr.classList.remove('locate-flash'), 1600);
   }
   firstRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  toast((t.kind === 'proxy' ? '已定位到当前代理：' : '已定位到已勾选：') + t.label, 'ok', 2000);
+  if (msg) toast(msg, 'ok', 2000);
+}
+
+/** 顶部「定位」按钮：优先当前代理，其次已勾选 */
+function locateCurrent() {
+  const t = locateTargets();
+  if (!t) return toast('没有可定位的目标：系统代理未开启，也还没勾选节点', 'err');
+  locateNodeIds(t.ids, (t.kind === 'proxy' ? '已定位到当前代理：' : '已定位到已勾选：') + t.label);
+}
+
+/** 右键菜单用：跳转到某个节点（按下标排序后的行位置） */
+function locateNodeById(id, msg) {
+  return locateNodeIds([id], msg);
 }
 
 const ROUTE_LABEL = { global: '全局代理', 'bypass-cn': '绕过大陆', 'proxy-list': '仅名单代理' };
@@ -3036,8 +3061,37 @@ function openNodeMenu(id, x, y) {
   const n = state.nodes.find((it) => it.id === id);
   if (!n) return;
   const link = window.IPHShare ? window.IPHShare.toShareLink(n) : '';
+
+  // 定位项：右键也能跳回「当前在用的节点 / 已勾选的节点」，不用回到顶部按钮
+  const inUse = proxyInUseId();
+  const inUseNode = inUse ? state.nodes.find((it) => it.id === inUse) : null;
+  const inUseName = inUseNode ? inUseNode.name || inUseNode.server : inUse;
+  const selN = state.selected.size;
+  const locateItems = [];
+  if (inUse) {
+    locateItems.push({
+      label: inUse === id ? '定位到本行（就是当前代理）' : `跳转到当前代理（${inUseName}）`,
+      onClick: () => locateNodeById(inUse, '已定位到当前代理：' + inUseName),
+    });
+  }
+  if (selN) {
+    locateItems.push({
+      label: selN === 1 && state.selected.has(id) ? '定位到本行（就是已勾选的）' : `跳转到已勾选（${selN} 个）`,
+      onClick: () => locateCurrent(),
+    });
+  }
+  if (!locateItems.length) {
+    locateItems.push({
+      label: '跳转到当前代理（未开启，也未勾选）',
+      onClick: () => toast('系统代理未开启，也没有勾选节点', 'err'),
+    });
+  } else {
+    locateItems.push('-');
+  }
+
   showContextMenu(
     [
+      ...locateItems,
       { label: '节点详情', onClick: () => openDrawer(id) },
       { label: link ? '复制分享链接' : '复制分享链接（该协议暂不支持）', onClick: () => copyShareLink(n) },
       { label: '分享节点（查看链接）…', onClick: () => showShareLink(n) },
