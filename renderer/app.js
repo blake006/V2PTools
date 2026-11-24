@@ -559,7 +559,7 @@ function updateStats() {
 
 function updateSelInfo() {
   const n = state.selected.size;
-  $('#selInfo').textContent = n ? `已选择 ${n} 项` : '';
+  $('#selInfo').textContent = n ? `已选择 ${n} 项${n > 1 ? ' · 系统代理需单选' : ''}` : '';
   $('#selCount').textContent = `已选 ${n}`;
   $('#btnDeleteSel').disabled = n === 0;
   const all = state.nodes.length > 0 && n === state.nodes.length;
@@ -1606,14 +1606,20 @@ function proxyInUseId() {
   return g && g.running && g.node ? g.node.id : null;
 }
 
-/** 顶部按钮要作用于哪个节点：优先「只勾选了一个」，否则用正在使用的，否则列表唯一节点 */
+/** 顶部按钮要作用于哪个节点：只勾一个就用它；否则用正在使用中的；只有一个节点时用它；勾了多个不放行 */
 function pickProxyNode() {
   if (state.selected.size === 1) return [...state.selected][0];
   const inUse = proxyInUseId();
   if (inUse) return inUse;
   if (state.nodes.length === 1) return state.nodes[0].id;
-  if (state.selected.size > 1) return [...state.selected][0];
   return null;
+}
+
+/** 勾选了多个时的统一提示：系统代理同一时刻只能有一个出口 */
+function multiSelHint() {
+  const n = state.selected.size;
+  if (n <= 1) return '';
+  return `已勾选 ${n} 个节点：系统代理一次只能用一个，请只勾选一个（或在行末点「设为系统代理」）`;
 }
 
 const ROUTE_LABEL = { global: '全局代理', 'bypass-cn': '绕过大陆', 'proxy-list': '仅名单代理' };
@@ -1637,7 +1643,11 @@ function renderProxyState(st) {
   btn.classList.toggle('on', on);
   btn.disabled = !state.nodes.length || state.proxyBusy;
   $('#btnProxyText').textContent = on ? (gw.tunMode ? `TUN :${gw.port}` : `代理 :${gw.port}`) : '系统代理';
-  btn.title = on ? `系统代理已开启 → 127.0.0.1:${gw.port}（${routeLabel}），点击关闭` : '把选中的节点设为系统代理';
+  btn.title = on
+    ? `系统代理已开启 → 127.0.0.1:${gw.port}（${routeLabel}），点击关闭`
+    : state.selected.size > 1
+      ? `已勾选 ${state.selected.size} 个节点：系统代理一次只能用一个，请只勾选一个节点`
+      : '把选中的节点设为系统代理';
 
   const badge = $('#proxyBadge');
   badge.classList.toggle('ok', pstate === 'on');
@@ -1866,14 +1876,14 @@ async function toggleSystemProxy() {
   // 被外部改动 / 指向别处：直接抢回来（重新 apply 会覆盖）
   if (pstate === 'hijacked' || pstate === 'foreign') {
     const id = pickProxyNode() || (state.proxy && state.proxy.gateway && state.proxy.gateway.node && state.proxy.gateway.node.id);
-    if (!id) return toast('请先勾选一个节点，再接管系统代理', 'err');
+    if (!id) return toast(multiSelHint() || '请先勾选一个节点，再接管系统代理', 'err');
     toast('正在重新接管系统代理…');
     return enableSystemProxyById(id);
   }
   if (state.proxy && state.proxy.on) return disableSystemProxy();
 
   const id = pickProxyNode();
-  if (!id) return toast('请先勾选一个节点，或在行末点击「设为系统代理」', 'err');
+  if (!id) return toast(multiSelHint() || '请先勾选一个节点，或在行末点击「设为系统代理」', 'err');
   return enableSystemProxyById(id);
 }
 
@@ -2166,7 +2176,7 @@ $('#proxyMenu').addEventListener('click', (e) => {
     if (modeBtn.dataset.proxymode === 'tun') startTunMode();
     else {
       const id = pickProxyNode() || (state.proxy && state.proxy.gateway && state.proxy.gateway.node && state.proxy.gateway.node.id);
-      if (!id) return toast('请先勾选一个节点', 'err');
+      if (!id) return toast(multiSelHint() || '请先勾选一个节点', 'err');
       enableSystemProxyById(id, 'system');
     }
     return;
@@ -2183,7 +2193,7 @@ $('#proxyMenu').addEventListener('click', (e) => {
  */
 async function startTunMode() {
   const id = pickProxyNode() || (state.proxy && state.proxy.gateway && state.proxy.gateway.node && state.proxy.gateway.node.id);
-  if (!id) return toast('请先勾选一个节点', 'err');
+  if (!id) return toast(multiSelHint() || '请先勾选一个节点', 'err');
 
   setStatus('正在检查 TUN 环境…');
   let ready = null;
